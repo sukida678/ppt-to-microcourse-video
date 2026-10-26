@@ -160,7 +160,10 @@ jobs:
           out=$(python scripts/compose.py --project "ci test/课件" \
                   --resolution 1280x720 --motion none --sub-font "Zz No Such Font" 2>&1)
           echo "$out" | tail -20
-          echo "$out" | grep -E "not installed — using|no CJK font installed"
+          if ! echo "$out" | grep -E "not installed — using|no CJK font installed"; then
+            echo "::error title=no font substitution::compose kept 'Zz No Such Font' — a missing family would burn every CJK glyph as an empty box"
+            exit 1
+          fi
 
   full-pipeline:
     name: full pipeline · ${{ matrix.os }}

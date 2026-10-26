@@ -70,6 +70,15 @@ CJK_FONT_CANDIDATES = (
     "Hiragino Sans GB", "WenQuanYi Micro Hei", "SimHei", "SimSun", "DengXian",
 )
 
+# Where macOS keeps font files; .ttc bundles are named after the family
+DARWIN_FONT_DIRS = (
+    "/System/Library/Fonts",
+    "/System/Library/Fonts/Supplemental",
+    "/Library/Fonts",
+    "/Network/Library/Fonts",
+    "~/Library/Fonts",
+)
+
 # family -> files shipped with Windows; a family we cannot map stays "unknown"
 WIN_FONT_FILES = {
     "microsoft yahei": ("msyh.ttc", "msyh.ttf", "msyhbd.ttc", "msyhl.ttc"),
@@ -95,6 +104,26 @@ WIN_FONT_FILES = {
     "consolas": ("consola.ttf", "consolab.ttf"),
     "courier new": ("cour.ttf",),
 }
+
+
+def _darwin_has_font(fam: str, dirs: tuple[str, ...] = DARWIN_FONT_DIRS) -> bool | None:
+    """Does any of `dirs` hold a font file named after `fam`? None if no dir exists.
+
+    PingFang/Hiragino ship as .ttc bundles whose *file* name is the family, so listing
+    the directory is a real answer. A family missing from every dir macOS uses is
+    missing (False), not unknown — leaving it None would let libass quietly burn empty
+    boxes, which is exactly what this check exists to prevent.
+    """
+    looked = False
+    for d in dirs:
+        folder = Path(d).expanduser()
+        if not folder.is_dir():
+            continue
+        looked = True
+        needle = fam.replace(" ", "")
+        if any(needle in p.name.lower().replace(" ", "") for p in folder.iterdir()):
+            return True
+    return False if looked else None
 
 
 def font_available(family: str) -> bool | None:
@@ -123,13 +152,7 @@ def font_available(family: str) -> bool | None:
         stems = {n.split(".")[0].split("-")[0] for n in names}
         return bool(token) and token in stems
     if sys.platform == "darwin":
-        # PingFang/Hiragino live in .ttc bundles whose *file* name is the family
-        for d in (Path("/System/Library/Fonts"), Path("/System/Library/Fonts/Supplemental"),
-                  Path("/Library/Fonts")):
-            if d.is_dir() and any(fam.replace(" ", "") in p.name.lower().replace(" ", "")
-                                  for p in d.iterdir()):
-                return True
-        return None
+        return _darwin_has_font(fam, DARWIN_FONT_DIRS)
     exe = shutil.which("fc-list")
     if not exe:
         return None

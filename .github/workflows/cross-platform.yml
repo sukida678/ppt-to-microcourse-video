@@ -32,17 +32,25 @@ jobs:
 
       - name: Install ffmpeg (+ a CJK font on Linux)
         run: |
+          set -euo pipefail
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update -qq
             sudo apt-get install -y -qq ffmpeg fonts-noto-cjk
           else
             brew install ffmpeg
+            # The macOS runner image ships its own ffmpeg earlier on PATH, and that
+            # build has no libass — so `subtitles` silently disappears while zoompan,
+            # libx264 and aac are all still there. Put the Homebrew build first.
+            echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
           fi
 
       - name: ffmpeg can actually do this job
         run: |
           # Every capability the pipeline depends on, checked one by one and reported
           # as a check-run annotation, so a failure is readable without the raw log.
+          echo "ffmpeg: $(command -v ffmpeg)"
+          command -v -a ffmpeg || true
+          ffmpeg -hide_banner -version | head -2 || true
           missing=""
           for cap in filters:subtitles filters:zoompan encoders:libx264 encoders:aac; do
             kind=${cap%%:*}
@@ -51,12 +59,11 @@ jobs:
               echo "ok    $kind/$name"
             else
               echo "MISS  $kind/$name"
-              echo "::error title=ffmpeg capability missing::$kind/$name is not in this ffmpeg build"
+              echo "::error title=ffmpeg capability missing::$kind/$name is not in $(command -v ffmpeg) — $(ffmpeg -hide_banner -version 2>/dev/null | head -1)"
               missing="$missing $kind/$name"
             fi
           done
-          ffmpeg -version | head -3 || true
-          ffmpeg -hide_banner -buildconf 2>/dev/null | grep -E 'libass|libx264|freetype' || true
+          ffmpeg -hide_banner -buildconf 2>/dev/null | grep -E 'libass|libx264|freetype' || echo "::warning title=ffmpeg buildconf::no libass/libx264/freetype line in -buildconf"
           if [ -n "$missing" ]; then
             echo "missing:$missing"
             exit 1
@@ -171,12 +178,15 @@ jobs:
 
       - name: Install ffmpeg, LibreOffice, CJK fonts
         run: |
+          set -euo pipefail
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update -qq
             sudo apt-get install -y -qq ffmpeg fonts-noto-cjk libreoffice-impress
           else
             brew install ffmpeg
+            echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
             brew install --cask libreoffice
+            ls -d /Applications/LibreOffice.app/Contents/MacOS/soffice || true
           fi
 
       - name: Python dependencies
@@ -184,12 +194,21 @@ jobs:
 
       - name: Doctor must say the full pipeline is ready
         run: |
-          set -euo pipefail
-          python scripts/doctor.py --no-net | tee doctor.json
+          set -uo pipefail
+          python scripts/doctor.py --no-net > doctor.json || true
           python - <<'PY'
-          import json, pathlib
+          import json, os, pathlib
+
           report = json.loads(pathlib.Path("doctor.json").read_text(encoding="utf-8-sig"))
-          print("ready:", report["ready"])
+          os_name = os.environ.get("RUNNER_OS", "?")
+          print(json.dumps(report, ensure_ascii=False, indent=1))
+          # Publish the interesting fields as an annotation: the raw job log needs admin
+          # rights to download, the annotations endpoint does not.
+          slim = {k: report.get(k) for k in
+                  ("python", "ffmpeg", "ffprobe", "libreoffice", "network",
+                   "ready", "blockers", "warnings")}
+          print(f"::warning title=doctor on {os_name}::"
+                + json.dumps(slim, ensure_ascii=False)[:900])
           assert report["ready"]["full_pipeline"] is True, report
           PY
 

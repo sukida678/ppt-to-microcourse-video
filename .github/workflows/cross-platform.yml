@@ -1,4 +1,4 @@
-﻿name: cross-platform
+name: cross-platform
 
 # Real Linux + macOS evidence, not inference:
 #   compose      → deterministic, no network: ffmpeg/libass, CJK font discovery,
@@ -41,12 +41,26 @@ jobs:
 
       - name: ffmpeg can actually do this job
         run: |
-          set -e
-          ffmpeg -hide_banner -filters  | grep -w subtitles
-          ffmpeg -hide_banner -filters  | grep -w zoompan
-          ffmpeg -hide_banner -encoders | grep -w libx264
-          ffmpeg -hide_banner -encoders | grep -w aac
-          ffmpeg -version | head -1
+          # Every capability the pipeline depends on, checked one by one and reported
+          # as a check-run annotation, so a failure is readable without the raw log.
+          missing=""
+          for cap in filters:subtitles filters:zoompan encoders:libx264 encoders:aac; do
+            kind=${cap%%:*}
+            name=${cap##*:}
+            if ffmpeg -hide_banner -"$kind" 2>/dev/null | grep -qw "$name"; then
+              echo "ok    $kind/$name"
+            else
+              echo "MISS  $kind/$name"
+              echo "::error title=ffmpeg capability missing::$kind/$name is not in this ffmpeg build"
+              missing="$missing $kind/$name"
+            fi
+          done
+          ffmpeg -version | head -3 || true
+          ffmpeg -hide_banner -buildconf 2>/dev/null | grep -E 'libass|libx264|freetype' || true
+          if [ -n "$missing" ]; then
+            echo "missing:$missing"
+            exit 1
+          fi
 
       - name: Build a project whose paths contain a space and CJK
         run: |

@@ -126,14 +126,19 @@ AI 会自动检查并告诉你缺哪个，这里只是备查：
 
 ## 目录结构
 
+仓库里就这些（21 个文件，克隆下来即可用）：
+
 ```
 ppt-to-microcourse-video/
-├── AGENTS.md              ← 给 AI 看的操作手册（Codex / Cursor / DSH 都会读）
+├── SKILL.md               ← 技能定义（Claude Code / DSH 的 skill 入口）
+├── AGENTS.md              ← 给 AI 看的操作手册（Codex / Cursor / DSH 都读，权威版）
 ├── CLAUDE.md              ← 同上的指针文件
 ├── README.md              ← 你正在看的这份
 ├── PROMPTS.md             ← 可以直接复制给 AI 的话术
 ├── install.py             ← 一键检查/安装依赖
-├── SKILL.md               ← 技能定义（Claude Code / DSH 的 skill 入口）
+├── LICENSE                ← MIT
+├── .gitignore             ← 忽略 build/、*.mp4、__pycache__
+├── .gitattributes         ← 统一换行；图片 / PPT 按二进制存
 ├── scripts/
 │   ├── doctor.py          ← 环境体检
 │   ├── make_course.py     ← 主程序：extract / build / all
@@ -141,10 +146,22 @@ ppt-to-microcourse-video/
 │   ├── tts_edge.py        ← 配音 + 字幕时间轴
 │   └── compose.py         ← 合成视频
 ├── references/            ← 讲稿写法、后端选择、排错手册
-├── docs/                  ← README 用的成片截图
+├── docs/                  ← README 里的两张成片截图
 └── examples/
     ├── demo.pptx          ← 三页示例 PPT，可以先拿它试
     └── narration.example.json
+```
+
+跑起来之后**只会往 `--work` 指定的目录里写东西**（下面以 `build/` 为例，这些不进仓库）：
+
+```
+build/
+├── png/slide_01.png …     ← 每页导出的图（150 dpi 约 2000×1125）
+├── slides.json            ← 每页的标题、要点、备注
+├── narration.json         ← 讲稿（AI 写的，你必须改掉模板）
+├── audio/  sub/  parts/   ← 配音 mp3、逐页字幕、分段视频
+├── course.mp4             ← 成片
+└── course.srt             ← 整片字幕（备用，不受 --subs 影响）
 ```
 
 ---

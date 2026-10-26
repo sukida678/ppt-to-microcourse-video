@@ -22,7 +22,11 @@
 
 **第 1 步：拿到这份 skill**
 
-`git clone` 或者解压压缩包到一个目录，例如 `D:\tools\ppt-to-microcourse-video`。
+```bash
+git clone https://github.com/sukida678/ppt-to-microcourse-video.git   # 或在页面上 Code → Download ZIP
+```
+
+也可以直接解压压缩包到一个目录，例如 `D:\tools\ppt-to-microcourse-video`。
 路径里有中文也行（已专门回归过中文路径），英文更省事。
 
 想先看效果，不用自己的课件：

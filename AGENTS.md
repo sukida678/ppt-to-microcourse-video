@@ -13,6 +13,28 @@ deck.pptx ──extract──▶ png/slide_NN.png + slides.json
 narration.json ──build──▶ per-slide mp3 ──▶ course.mp4 + course.srt
 ```
 
+### What is in this folder
+
+```
+AGENTS.md              ← this file: the authoritative manual, edit rules here first
+SKILL.md               ← frontmatter + short flow for skill-aware hosts (DSH / Claude Code)
+CLAUDE.md              ← pointer file → AGENTS.md
+README.md              ← Chinese guide for teachers (3 steps, FAQ, screenshots)
+PROMPTS.md             ← copy-paste prompts for common requests
+install.py             ← dependency check / install (--json for agents)
+docs/                  ← real frames from the demo build, used by README
+scripts/doctor.py      ← preflight: python, ffmpeg, soffice, edge-tts, network
+scripts/make_course.py ← extract / build / all — the entry point you normally call
+scripts/ppt2png.py     ← deck → pdf → png (LibreOffice, then PyMuPDF)
+scripts/tts_edge.py    ← narration → mp3 + word-timed SRT
+scripts/compose.py     ← slides + audio → per-slide mp4 → course.mp4 (+ BGM, global SRT)
+references/            ← scriptwriting math, input backends, troubleshooting
+examples/              ← demo.pptx + narration.example.json, safe to run end-to-end
+```
+
+Put every generated file in a work directory (`--work build`), never in the repo root:
+`build/`, `*.mp4` and `__pycache__/` are git-ignored.
+
 ---
 
 ## 0. Rules that override everything else

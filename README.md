@@ -95,13 +95,15 @@ AI 会自动检查并告诉你缺哪个，这里只是备查：
 | 组件 | 作用 | 安装 |
 |---|---|---|
 | Python 3.9+ | 跑脚本 | python.org |
-| ffmpeg | 合成视频 | Windows `winget install Gyan.FFmpeg` · macOS `brew install ffmpeg` · Linux `sudo apt install ffmpeg`（或 `dnf`） |
+| ffmpeg | 合成视频 | Windows `winget install Gyan.FFmpeg` · macOS **`brew install ffmpeg-full`** · Linux `sudo apt install ffmpeg`（或 `dnf`） |
 | LibreOffice | 把 PPT 转成图片 | Windows `winget install TheDocumentFoundation.LibreOffice` · macOS `brew install --cask libreoffice` · Linux `sudo apt install libreoffice-impress` |
 | 三个 Python 包 | 拆页 / 配音 / 读讲稿备注 | `pip install edge-tts pymupdf python-pptx` |
 
 一条命令全查：`python scripts/doctor.py --fix`（退出码 0 = 你手上这类输入能出片；加 `--strict` 则要求 `.pptx` 全流程可用，缺 LibreOffice 就返回 1）
 
 **没装 LibreOffice 也能用**：把它另存成 PDF，然后按 PDF 处理。
+
+**macOS 上务必装 `ffmpeg-full`**：Homebrew 官方的 `ffmpeg` 从 9.0 起是瘦身版，不带 libass，`brew install ffmpeg` 装完能转码但**烧不出字幕**。`doctor.py` 会直接把这条列成阻塞项；只想先要成品的话也可以 `--subs soft`，字幕单独出 `.srt`。
 
 ---
 

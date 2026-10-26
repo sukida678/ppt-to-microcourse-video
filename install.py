@@ -94,7 +94,7 @@ def install_hint(tool: str) -> str:
     win, mac = sys.platform == "win32", sys.platform == "darwin"
     hints = {
         "ffmpeg": ("winget install Gyan.FFmpeg",
-                   "brew install ffmpeg",
+                   "brew install ffmpeg-full   (plain `ffmpeg` has no libass: no subtitles)",
                    "sudo apt install ffmpeg   (or: sudo dnf install ffmpeg)"),
         "soffice": ("winget install TheDocumentFoundation.LibreOffice",
                     "brew install --cask libreoffice",

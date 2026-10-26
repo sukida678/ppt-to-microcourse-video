@@ -68,7 +68,8 @@ Prints JSON. Continue only when `ready.full_pipeline` is `true`.
 | blocker | fix |
 |---|---|
 | python package missing | `pip install edge-tts pymupdf python-pptx` |
-| `ffmpeg` missing | Windows `winget install Gyan.FFmpeg` · macOS `brew install ffmpeg` · Linux `apt install ffmpeg` (or `dnf`) |
+| `ffmpeg` missing | Windows `winget install Gyan.FFmpeg` · macOS **`brew install ffmpeg-full`** · Linux `apt install ffmpeg` (or `dnf`) |
+| `subtitles` filter missing (no libass) | the ffmpeg build is slim. Homebrew's `ffmpeg` formula dropped libass in 9.0 — on macOS install `ffmpeg-full` instead. Distro builds and Gyan's Windows builds are complete. |
 | `soffice` (LibreOffice) missing | Windows `winget install TheDocumentFoundation.LibreOffice` · macOS `brew install --cask libreoffice` · Linux `apt install libreoffice-impress` |
 | TTS probe fails (403/timeout) | network blocked. Try later, or see §7 "no TTS". |
 

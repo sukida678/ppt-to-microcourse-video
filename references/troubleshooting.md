@@ -69,7 +69,7 @@ TTS 对 `%`、`≥`、`/`、`→` 的处理不稳定。**脚本里就写成汉�
 ## 三、ffmpeg / 合成
 
 **`ffmpeg not found`**
-`brew install ffmpeg` / `apt install ffmpeg` / `winget install Gyan.FFmpeg`。
+macOS **`brew install ffmpeg-full`**（见下一条，官方 `ffmpeg` 是瘦身版）/ `apt install ffmpeg` / `winget install Gyan.FFmpeg`。
 Windows 也可以直接下 `ffmpeg-release-essentials.zip` 解压后把 `bin` 加进 PATH。
 
 **`height not divisible by 2` / `width not divisible by 2`**
@@ -77,7 +77,10 @@ Windows 也可以直接下 `ffmpeg-release-essentials.zip` 解压后把 `bin` �
 
 **`Error opening filters` / `No such filter: 'subtitles'`**
 这个 ffmpeg 构建没带 libass。检查 `ffmpeg -filters | grep subtitles`。
-没有的话用 `--subs soft`（只出 .srt 不烧进画面），或换官方 gyan.dev / Homebrew 的完整构建。
+**macOS 上这就是 `brew install ffmpeg` 的默认结果**：Homebrew 的 `ffmpeg` 9.0 起依赖里没有
+libass / fontconfig / freetype，能转码、烧不出字幕；换 `brew install ffmpeg-full` 才带。
+`doctor.py` 会把这条直接列成阻塞项，`compose.py` 在开始渲染前也会拦下来（而不是跑到一半才炸）。
+只想先要成品的话用 `--subs soft`（只出 .srt 不烧进画面）。
 
 **烧字幕时报 `Unable to open ... : Invalid argument`（Windows）**
 `subtitles=` 滤镜里的绝对路径 `C:\...` 会被当成选项分隔符。脚本现在会把路径换算成

@@ -180,6 +180,23 @@ def ffmpeg() -> str:
     return exe
 
 
+def has_filter(name: str) -> bool | None:
+    """Is `-filter` `name` in this build? None when the query itself failed.
+
+    A slim ffmpeg (Homebrew's `ffmpeg` formula since 9.0, which dropped libass) has no
+    `subtitles` filter at all. Encoding is fine, so ffmpeg 1 is right — it just dies on
+    the filtergraph with "No such filter", after TTS has already been paid for.
+    """
+    try:
+        res = subprocess.run([ffmpeg(), "-hide_banner", "-filters"], capture_output=True,
+                             text=True, encoding="utf-8", errors="replace", timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if res.returncode != 0:
+        return None
+    return re.search(rf"^\s*\S+\s+{re.escape(name)}\s", res.stdout or "", re.M) is not None
+
+
 def run(cmd, cwd=None, timeout=1800):
     res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd, timeout=timeout)
     if res.returncode != 0:
@@ -390,6 +407,18 @@ def main(argv=None) -> int:
     except Exception:
         print(json.dumps({"ok": False, "error": f"bad --resolution {args.resolution}"},
                          ensure_ascii=False))
+        return 2
+
+    # Refuse to start a long render on an ffmpeg that cannot burn a subtitle. The check
+    # is one subprocess; discovering it 40 slides later costs the whole TTS budget.
+    if args.subs == "burn" and has_filter("subtitles") is False:
+        print(json.dumps({
+            "ok": False,
+            "error": (f"{ffmpeg()} has no `subtitles` filter (no libass), so burned-in "
+                      f"subtitles are impossible. macOS: `brew install ffmpeg-full` — "
+                      f"plain `brew install ffmpeg` is the slim build since 9.0. "
+                      f"Or re-run with --subs soft to keep the .srt as a sidecar."),
+        }, ensure_ascii=False))
         return 2
 
     out_name = man.get("out") or "course.mp4"

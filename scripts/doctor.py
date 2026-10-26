@@ -67,6 +67,22 @@ def ffmpeg_has(ff: str, flag: str, name: str) -> bool | None:
     return re.search(rf"\b{re.escape(name)}\b", res.stdout or "") is not None
 
 
+def ffmpeg_hint() -> str:
+    """The install command that actually gives a build with libass on this platform.
+
+    Homebrew's `ffmpeg` formula was slimmed down: as of 9.0 it is built without
+    libass, freetype or fontconfig, so `brew install ffmpeg` on macOS yields a binary
+    that cannot burn a single subtitle. `ffmpeg-full` is the formula that still has
+    them, and it is not an obvious guess.
+    """
+    if sys.platform == "darwin":
+        return ("macOS: brew install ffmpeg-full "
+                "(plain `brew install ffmpeg` is the slim build: no libass, no subtitles)")
+    if sys.platform.startswith("win"):
+        return "Windows: winget install Gyan.FFmpeg"
+    return "Linux: sudo apt install ffmpeg (distro builds ship libass)"
+
+
 def pip_install(pkgs: list[str]) -> tuple[bool, str]:
     cmd = [sys.executable, "-m", "pip", "install", "--quiet", *pkgs]
     mirror = os.environ.get("PIP_INDEX_URL")
@@ -133,8 +149,7 @@ def main(argv=None) -> int:
     checks["ffmpeg"] = {"ok": bool(ff), "path": ff, "version": bin_version(ff) if ff else None}
     checks["ffprobe"] = {"ok": bool(fp), "path": fp}
     if not ff:
-        report["blockers"].append("ffmpeg not on PATH (brew install ffmpeg / apt install ffmpeg / "
-                                  "winget install Gyan.FFmpeg)")
+        report["blockers"].append(f"ffmpeg not on PATH — {ffmpeg_hint()}")
     if ff and not fp:
         report["blockers"].append("ffprobe not on PATH (usually ships with ffmpeg)")
 
@@ -150,8 +165,7 @@ def main(argv=None) -> int:
             caps[name] = has
             if has is False:
                 report["blockers"].append(
-                    f"this ffmpeg has no {name} → no {what}; install a full build "
-                    f"(Gyan.FFmpeg / brew install ffmpeg / apt install ffmpeg)")
+                    f"this ffmpeg has no {name} → no {what}; {ffmpeg_hint()}")
         checks["ffmpeg_capabilities"] = {"ok": all(v is not False for v in caps.values()), **caps}
 
         # libass silently substitutes a wrong/missing font and burns empty boxes

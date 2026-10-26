@@ -37,10 +37,10 @@ jobs:
             sudo apt-get update -qq
             sudo apt-get install -y -qq ffmpeg fonts-noto-cjk
           else
-            brew install ffmpeg
-            # The macOS runner image ships its own ffmpeg earlier on PATH, and that
-            # build has no libass — so `subtitles` silently disappears while zoompan,
-            # libx264 and aac are all still there. Put the Homebrew build first.
+            # NOT `brew install ffmpeg`: since 9.0 that formula is the slim build with no
+            # libass/fontconfig/freetype, so the `subtitles` filter is absent and burned-in
+            # subtitles are impossible. `ffmpeg-full` is the one with libass.
+            brew install ffmpeg-full
             echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
           fi
 
@@ -183,7 +183,7 @@ jobs:
             sudo apt-get update -qq
             sudo apt-get install -y -qq ffmpeg fonts-noto-cjk libreoffice-impress
           else
-            brew install ffmpeg
+            brew install ffmpeg-full
             echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
             brew install --cask libreoffice
             ls -d /Applications/LibreOffice.app/Contents/MacOS/soffice || true

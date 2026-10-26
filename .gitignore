@@ -1,0 +1,29 @@
+# work products
+build/
+out/
+output/
+course.mp4
+course.srt
+*.mp4
+*.wav
+*.mp3
+png/
+parts/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# keep the demo assets
+!examples/*.pptx
+!examples/*.json

@@ -1,0 +1,9 @@
+{
+  "_help": "Copy this next to your build/ folder, replace the strings, and pass it to `make_course.py build`. Keys are slide numbers. An empty string holds the slide silently for --hold seconds.",
+  "voice": "zh-CN-XiaoxiaoNeural",
+  "slides": {
+    "1": "先问一句：车间里那么多按钮、传感器和电机，是谁在指挥它们按顺序配合的？答案就是今天的主角——PLC。",
+    "2": "拆开看，它只有三块：输入单元负责听，CPU 负责想，输出单元负责做。跟人干活的方式一模一样。",
+    "3": "所以记住一句话就够了：PLC 是工业现场的大脑。它不聪明，但它从不走神。"
+  }
+}

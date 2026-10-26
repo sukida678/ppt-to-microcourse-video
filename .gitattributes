@@ -1,0 +1,10 @@
+# keep the repo line-ending-neutral so the same checkout works on Windows, macOS and Linux
+* text=auto eol=lf
+
+# binaries: never touch
+*.png  binary
+*.jpg  binary
+*.pptx binary
+*.pdf  binary
+*.mp4  binary
+*.zip  binary

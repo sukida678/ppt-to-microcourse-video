@@ -32,6 +32,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import quote
 
 
 def safe_stdio() -> None:
@@ -79,6 +80,22 @@ def run(cmd, cwd=None, timeout=300):
 
 
 def find_soffice(explicit: str | None = None) -> str | None:
+    """One search order for the whole skill: make_course.find_soffice is canonical.
+
+    The local fallback below only exists so this file still works when it is copied
+    out of the skill folder on its own.
+    """
+    try:
+        from make_course import find_soffice as canonical  # noqa: PLC0415
+    except Exception:
+        canonical = None
+    if canonical is not None:
+        try:
+            hit = canonical(explicit)
+            if hit or explicit:
+                return hit
+        except Exception:
+            pass
     if explicit:
         return explicit if Path(explicit).exists() else None
     env = os.environ.get("SOFFICE_BIN")
@@ -105,27 +122,89 @@ def find_dsoffice() -> tuple[str, str] | None:
     return None
 
 
-def convert_to_pdf(src: Path, workdir: Path, converter: str, soffice: str | None) -> tuple[Path, str]:
-    """Return (pdf_path, backend_name)."""
+def profile_uri(profile: Path) -> str:
+    """`file:///` URI for `-env:UserInstallation`, with every unsafe byte encoded.
+
+    LibreOffice parses that value as a *URI*: a literal space makes the whole
+    conversion die with an empty message, so `D:\\课件 2024\\` and
+    `/Users/x/My Courses/` both fail unless the path is percent-encoded here.
+    The drive colon and the POSIX separators stay readable (`safe="/:"`); UNC paths
+    (`//host/share`) keep their double slash so they stay `file://host/share`.
+    """
+    path = profile.as_posix()
+    if path.startswith("//"):
+        return "file:" + quote(path, safe="/:")
+    return "file://" + quote("/" + path.lstrip("/"), safe="/:")
+
+
+def soffice_hint(exc: Exception, cmd: list[str], profile: Path | None) -> str:
+    """Turn a silent converter failure into something a human can act on.
+
+    `soffice.exe` is a GUI binary on Windows: it exits non-zero with *nothing* on
+    stdout/stderr, so a plain "failed (exit N):" message ends in a bare colon.
+    """
+    detail = str(exc).split("\n", 1)[1].strip() if "\n" in str(exc) else ""
+    lines = [str(exc)]
+    if not detail:
+        lines.append("  (the converter printed nothing — soffice.exe has no console "
+                     "output on Windows, so this is expected)")
+    lines.append(f"  command: {subprocess.list2cmdline(cmd)}")
+    if profile is not None:
+        lines.append(f"  profile: {profile}")
+    hints = [
+        "the deck is open in LibreOffice (profile lock) — close it and retry",
+        "a path contains characters the converter cannot open; the profile URI is "
+        "percent-encoded now, so check the --deck / --outdir path next",
+        "the invoker has no write access to the profile directory",
+        "the deck is corrupt or password-protected",
+    ]
+    lines.append("  likely causes:")
+    lines.extend(f"    - {h}" for h in hints)
+    return "\n".join(lines)
+
+
+def convert_to_pdf(src: Path, workdir: Path, converter: str = "auto",
+                   soffice: str | None = None,
+                   profile: Path | None = None) -> tuple[Path, str]:
+    """Return (pdf_path, backend_name).
+
+    `profile` gives LibreOffice an isolated user profile (a GUI instance then cannot
+    lock us out) at the cost of passing -env:UserInstallation, which must be a URI —
+    that is what `profile_uri` is for. Pass None to use the user's own profile.
+    """
     workdir.mkdir(parents=True, exist_ok=True)
     out_pdf = workdir / (src.stem + ".pdf")
 
     if converter in ("auto", "soffice"):
         exe = find_soffice(soffice)
         if exe:
-            # No -env:UserInstallation here on purpose: this call lets soffice use the
-            # user's own profile, so nothing is parsed as a URI and a path with spaces
-            # cannot break it (the failure mode make_course.profile_uri() exists for).
-            # Trade-off: a running LibreOffice GUI therefore *can* lock us out, which
-            # is why make_course passes an isolated profile when it owns the work dir.
-            res = run([exe, "--headless", "--norestore", "--convert-to", "pdf",
-                       "--outdir", str(workdir), str(src)])
+            cmd = [exe, "--headless", "--norestore", "--nologo", "--nofirststartwizard"]
+            prof: Path | None = None
+            if profile is not None:
+                prof = Path(profile).resolve()
+                try:
+                    prof.mkdir(parents=True, exist_ok=True)
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"cannot create the LibreOffice profile dir {prof}: {exc}") from exc
+                cmd.append(f"-env:UserInstallation={profile_uri(prof)}")
+            cmd += ["--convert-to", "pdf", "--outdir", str(workdir), str(src)]
+            res = run(cmd)
+            if res.returncode != 0:
+                msg = (f"soffice pptx->pdf failed (exit {res.returncode}):\n"
+                       f"{(res.stderr or res.stdout or '').strip()}")
+                if converter == "soffice" or prof is not None:
+                    raise RuntimeError(soffice_hint(RuntimeError(msg), cmd, prof))
+                print(f"  ! {msg}", flush=True)
             if out_pdf.exists() and out_pdf.stat().st_size > 0:
                 return out_pdf, "soffice"
+            matches = sorted(workdir.glob("*.pdf"))
+            if matches:
+                return matches[0], "soffice"
             if converter == "soffice":
                 raise RuntimeError(
-                    f"soffice failed to convert\ncmd: {exe}\n"
-                    f"stdout: {res.stdout.strip()}\nstderr: {res.stderr.strip()}")
+                    f"soffice reported success but produced no PDF in {workdir}\n"
+                    f"  command: {subprocess.list2cmdline(cmd)}")
 
     if converter in ("auto", "dsoffice"):
         pair = find_dsoffice()

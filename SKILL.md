@@ -140,7 +140,7 @@ silently failed — say so rather than claiming success.
 ```
 scripts/doctor.py      环境自检 + 可选自动 pip 安装
 scripts/make_course.py 编排：extract / build / all
-scripts/ppt2png.py     渲染：pptx/pdf → pdf → png（LibreOffice + PyMuPDF）
+scripts/ppt2png.py     渲染：pptx/pdf → pdf → png（`extract` 用的就是这份代码，也可单独跑）
 scripts/tts_edge.py    edge-tts 旁白合成 + 逐词 SRT
 scripts/compose.py     ffmpeg 合成：缩放/运镜/字幕/转场/拼接/配乐
 references/            脚本撰写、后端替换、故障排查

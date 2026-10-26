@@ -144,7 +144,7 @@ ppt-to-microcourse-video/
 ├── scripts/
 │   ├── doctor.py          ← 环境体检
 │   ├── make_course.py     ← 主程序：extract / build / all
-│   ├── ppt2png.py         ← PPT / PDF → 图片
+│   ├── ppt2png.py         ← PPT / PDF → 图片（与主流程共用同一份转换代码）
 │   ├── tts_edge.py        ← 配音 + 字幕时间轴
 │   └── compose.py         ← 合成视频
 ├── references/            ← 讲稿写法、后端选择、排错手册

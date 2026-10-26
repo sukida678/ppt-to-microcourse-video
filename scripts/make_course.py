@@ -91,6 +91,7 @@ SOFFICE_CANDIDATES = [
 
 def find_soffice(explicit: str | None = None) -> str | None:
     for cand in [explicit, os.environ.get("SOFFICE"),
+                 os.environ.get("SOFFICE_BIN"),
                  os.environ.get("LIBREOFFICE_BIN")]:
         if cand and Path(os.path.expandvars(cand)).exists():
             return str(Path(os.path.expandvars(cand)))
@@ -122,95 +123,39 @@ def run_cmd(cmd, cwd=None, timeout=900, label=""):
 
 
 # --------------------------------------------------------------------------- extract
-def profile_uri(profile: Path) -> str:
-    """`file:///` URI for `-env:UserInstallation`, with every unsafe byte encoded.
+def _ppt2png():
+    """The converter lives in ppt2png.py — one implementation, not two.
 
-    LibreOffice parses that value as a *URI*: a literal space makes the whole
-    conversion die with an empty message (see deck_to_pdf), so `D:\\课件 2024\\` and
-    `/Users/x/My Courses/` both fail unless the path is percent-encoded here.
-
-    The drive colon and the POSIX separators stay readable (`safe="/:"`); UNC paths
-    (`//host/share`) keep their double slash so they stay `file://host/share`.
+    make_course used to carry its own copy of the soffice call and the PyMuPDF
+    renderer; the two copies drifted (ppt2png passed no profile, so a deck path with
+    spaces broke there). Both now go through the functions below.
     """
-    path = profile.as_posix()
-    if path.startswith("//"):
-        return "file:" + quote(path, safe="/:")
-    return "file://" + quote("/" + path.lstrip("/"), safe="/:")
+    scripts_dir = Path(__file__).resolve().parent
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    import ppt2png  # noqa: PLC0415
 
-
-def _soffice_hint(exc: Exception, cmd: list[str], profile: Path) -> str:
-    """Turn a silent converter failure into something a human can act on.
-
-    `soffice.exe` is a GUI binary on Windows: it exits non-zero with *nothing* on
-    stdout/stderr, so the plain `run_cmd` message ends in a bare colon. Always show
-    the real command plus the three causes we actually see in the field.
-    """
-    detail = str(exc).split("\n", 1)[1].strip() if "\n" in str(exc) else ""
-    lines = [str(exc)]
-    if not detail:
-        lines.append("  (the converter printed nothing — soffice.exe has no console "
-                     "output on Windows, so this is expected)")
-    lines.append(f"  command: {subprocess.list2cmdline(cmd)}")
-    lines.append(f"  profile: {profile}")
-    hints = [
-        "the deck is open in LibreOffice (profile lock) — close it and retry",
-        "a path contains characters the converter cannot open; the profile URI is "
-        "percent-encoded now, so check the --deck / --outdir path next",
-        "the invoker has no write access to the profile directory",
-        "the deck is corrupt or password-protected",
-    ]
-    lines.append("  likely causes:")
-    lines.extend(f"    - {h}" for h in hints)
-    return "\n".join(lines)
+    return ppt2png
 
 
 def deck_to_pdf(deck: Path, out_dir: Path, soffice: str) -> Path:
-    profile = (out_dir / "_lo_profile").resolve()
-    try:
-        profile.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise RuntimeError(f"cannot create the LibreOffice profile dir {profile}: {exc}") from exc
-    cmd = [
-        soffice, "--headless", "--norestore", "--nologo", "--nofirststartwizard",
-        f"-env:UserInstallation={profile_uri(profile)}",
-        "--convert-to", "pdf", "--outdir", str(out_dir), str(deck),
-    ]
-    try:
-        run_cmd(cmd, label="soffice pptx->pdf")
-    except RuntimeError as exc:
-        raise RuntimeError(_soffice_hint(exc, cmd, profile)) from exc
-    pdf = out_dir / (deck.stem + ".pdf")
-    if not pdf.exists():
-        matches = list(out_dir.glob("*.pdf"))
-        if not matches:
-            raise RuntimeError(f"soffice reported success but produced no PDF in {out_dir}\n"
-                               f"  command: {subprocess.list2cmdline(cmd)}")
-        pdf = matches[0]
+    """PPTX/PPT -> PDF with an isolated, percent-encoded LibreOffice profile.
+
+    A literal space in the profile path used to kill the conversion with an empty
+    message; `ppt2png.profile_uri` encodes it, and `soffice_hint` explains the
+    failure when the converter still exits without printing anything.
+    """
+    pdf, _backend = _ppt2png().convert_to_pdf(
+        deck, out_dir, "auto", soffice, profile=out_dir / "_lo_profile")
     return pdf
 
 
 def pdf_to_png(pdf: Path, png_dir: Path, dpi: int) -> list[Path]:
+    """PDF -> slide PNGs through the one renderer (drops stale PNGs first)."""
     png_dir.mkdir(parents=True, exist_ok=True)
     for old in png_dir.glob("*.png"):
         old.unlink()
-    try:
-        import pymupdf  # noqa: PLC0415
-    except Exception:
-        try:
-            import fitz as pymupdf  # noqa: PLC0415
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError("pymupdf is required for pdf->png (pip install pymupdf)") from exc
-    doc = pymupdf.open(str(pdf))
-    zoom = dpi / 72.0
-    mat = pymupdf.Matrix(zoom, zoom)
-    paths = []
-    for i, page in enumerate(doc, start=1):
-        pix = page.get_pixmap(matrix=mat, alpha=False)
-        out = png_dir / f"slide_{i:02d}.png"
-        pix.save(str(out))
-        paths.append(out)
-    doc.close()
-    return paths
+    return _ppt2png().render_pdf(pdf, png_dir, dpi, "slide")
 
 
 def extract_text(deck: Path) -> list[dict]:

@@ -25,7 +25,7 @@ install.py             ← dependency check / install (--json for agents)
 docs/                  ← real frames from the demo build, used by README
 scripts/doctor.py      ← preflight: python, ffmpeg, soffice, edge-tts, network
 scripts/make_course.py ← extract / build / all — the entry point you normally call
-scripts/ppt2png.py     ← deck → pdf → png (LibreOffice, then PyMuPDF)
+scripts/ppt2png.py     ← deck → pdf → png; the single converter make_course also uses
 scripts/tts_edge.py    ← narration → mp3 + word-timed SRT
 scripts/compose.py     ← slides + audio → per-slide mp4 → course.mp4 (+ BGM, global SRT)
 references/            ← scriptwriting math, input backends, troubleshooting
@@ -220,7 +220,8 @@ More: [references/troubleshooting.md](references/troubleshooting.md).
 ## 8. Inputs other than `.pptx`
 
 - **PDF** — `--deck lesson.pdf` works; slides are rasterised with PyMuPDF at `--dpi`.
-- **A folder of images** — `python scripts/make_course.py extract --images ./slides --work build`.
+- **A folder of images** — `python scripts/make_course.py extract --deck ./slides --work build`
+  (`--deck` accepts a directory of `PNG/JPG/WEBP`; there is no `--images` flag).
   Files sort by name, so zero-pad them (`01.png`, `02.png`, …).
 - **Already a video** — out of scope; this tool makes video from stills.
 

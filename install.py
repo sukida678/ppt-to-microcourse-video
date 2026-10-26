@@ -46,10 +46,14 @@ safe_stdio()
 
 PY_PKGS = [
     ("edge_tts", "edge-tts", "text-to-speech + word timings"),
-    ("fitz", "pymupdf", "PDF / slide rasterising"),
+    # PyMuPDF renamed its import to `pymupdf`; `fitz` still ships as a shim that warns
+    # on import, so try the new name first and never import the shim needlessly.
+    ("pymupdf", "pymupdf", "PDF / slide rasterising"),
     ("PIL", "pillow", "image checks"),
     ("pptx", "python-pptx", "speaker notes + text extraction fallback"),
 ]
+
+MODULE_ALIASES = {"pymupdf": ("pymupdf", "fitz")}
 
 SOFFICE_HINTS = [
     r"C:\Program Files\LibreOffice\program\soffice.exe",
@@ -87,15 +91,18 @@ def find_soffice() -> str | None:
 
 
 def have_module(mod: str) -> bool:
-    return importlib.util.find_spec(mod) is not None
+    return any(importlib.util.find_spec(m) is not None
+               for m in MODULE_ALIASES.get(mod, (mod,)))
 
 
 def version_of(mod: str) -> str:
-    try:
-        m = importlib.import_module(mod)
-    except Exception:  # noqa: BLE001
-        return ""
-    return str(getattr(m, "__version__", "") or "")
+    for name in MODULE_ALIASES.get(mod, (mod,)):
+        try:
+            m = importlib.import_module(name)
+        except Exception:  # noqa: BLE001
+            continue
+        return str(getattr(m, "__version__", "") or "")
+    return ""
 
 
 def check() -> dict:

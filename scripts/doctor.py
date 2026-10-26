@@ -30,10 +30,15 @@ PY_DEPS = {
 
 
 def has_module(name: str) -> bool:
-    try:
-        return importlib.util.find_spec(name) is not None
-    except Exception:
-        return False
+    """`pymupdf` is importable as `pymupdf` (new) or `fitz` (legacy shim, warns)."""
+    candidates = ("pymupdf", "fitz") if name == "pymupdf" else (name,)
+    for mod in candidates:
+        try:
+            if importlib.util.find_spec(mod) is not None:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def bin_version(exe: str, args=("-version",)) -> str | None:

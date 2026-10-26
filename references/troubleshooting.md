@@ -80,12 +80,16 @@ Windows 也可以直接下 `ffmpeg-release-essentials.zip` 解压后把 `bin` �
 没有的话用 `--subs soft`（只出 .srt 不烧进画面），或换官方 gyan.dev / Homebrew 的完整构建。
 
 **烧字幕时报 `Unable to open ... : Invalid argument`（Windows）**
-`subtitles=` 滤镜里的绝对路径 `C:\...` 会被当成选项分隔符。脚本已经统一改用**相对 work 目录**
-的路径（`build/sub/01.srt`）来规避。自己改代码时别改回绝对路径。
+`subtitles=` 滤镜里的绝对路径 `C:\...` 会被当成选项分隔符。脚本现在会把路径换算成
+**相对 `--project`** 的 `build/sub/01.srt`；若还剩空格/引号/逗号/方括号，就复制成
+`parts/sub_NN.srt` 这种纯 ASCII 短名再引用。路径在 project 外时不会烧字幕，并打
+`! [01] subtitle file lives outside --project`。自己改代码时别改回绝对路径。
 
 **字幕字体被替换成宋体 / 位置偏了**
-`force_style` 里的 `FontName=Microsoft YaHei` 在 Linux/mac 上不存在。改成系统里有的字体
-（`Noto Sans CJK SC`、`PingFang SC`），或装对应字体。
+`--sub-font` 的默认值现在是**按平台**给的（Windows `Microsoft YaHei` / macOS `PingFang SC` /
+Linux `Noto Sans CJK SC`）。`compose.py` 会先探测字体是否真的装了：没装就换成第一个可用的
+CJK 字体并打印 `! subtitle font 'X' is not installed — using 'Y'`；一个 CJK 字体都找不到时
+`ok` 会变 `false`（否则 libass 会静默烧出豆腐块）。
 
 **`DTS out of order` / 拼接后音画错位**
 所有分段必须**同一套编码参数**才能 `-c copy` 拼接。`compose.py` 已统一（libx264/aac/48k/stereo），

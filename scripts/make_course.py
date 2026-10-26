@@ -29,6 +29,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 HERE = Path(__file__).resolve().parent
 IMG_EXT = {".png", ".jpg", ".jpeg", ".webp"}
@@ -121,20 +122,69 @@ def run_cmd(cmd, cwd=None, timeout=900, label=""):
 
 
 # --------------------------------------------------------------------------- extract
+def profile_uri(profile: Path) -> str:
+    """`file:///` URI for `-env:UserInstallation`, with every unsafe byte encoded.
+
+    LibreOffice parses that value as a *URI*: a literal space makes the whole
+    conversion die with an empty message (see deck_to_pdf), so `D:\\课件 2024\\` and
+    `/Users/x/My Courses/` both fail unless the path is percent-encoded here.
+
+    The drive colon and the POSIX separators stay readable (`safe="/:"`); UNC paths
+    (`//host/share`) keep their double slash so they stay `file://host/share`.
+    """
+    path = profile.as_posix()
+    if path.startswith("//"):
+        return "file:" + quote(path, safe="/:")
+    return "file://" + quote("/" + path.lstrip("/"), safe="/:")
+
+
+def _soffice_hint(exc: Exception, cmd: list[str], profile: Path) -> str:
+    """Turn a silent converter failure into something a human can act on.
+
+    `soffice.exe` is a GUI binary on Windows: it exits non-zero with *nothing* on
+    stdout/stderr, so the plain `run_cmd` message ends in a bare colon. Always show
+    the real command plus the three causes we actually see in the field.
+    """
+    detail = str(exc).split("\n", 1)[1].strip() if "\n" in str(exc) else ""
+    lines = [str(exc)]
+    if not detail:
+        lines.append("  (the converter printed nothing — soffice.exe has no console "
+                     "output on Windows, so this is expected)")
+    lines.append(f"  command: {subprocess.list2cmdline(cmd)}")
+    lines.append(f"  profile: {profile}")
+    hints = [
+        "the deck is open in LibreOffice (profile lock) — close it and retry",
+        "a path contains characters the converter cannot open; the profile URI is "
+        "percent-encoded now, so check the --deck / --outdir path next",
+        "the invoker has no write access to the profile directory",
+        "the deck is corrupt or password-protected",
+    ]
+    lines.append("  likely causes:")
+    lines.extend(f"    - {h}" for h in hints)
+    return "\n".join(lines)
+
+
 def deck_to_pdf(deck: Path, out_dir: Path, soffice: str) -> Path:
     profile = (out_dir / "_lo_profile").resolve()
-    profile.mkdir(parents=True, exist_ok=True)
+    try:
+        profile.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(f"cannot create the LibreOffice profile dir {profile}: {exc}") from exc
     cmd = [
         soffice, "--headless", "--norestore", "--nologo", "--nofirststartwizard",
-        f"-env:UserInstallation=file:///{profile.as_posix().lstrip('/')}",
+        f"-env:UserInstallation={profile_uri(profile)}",
         "--convert-to", "pdf", "--outdir", str(out_dir), str(deck),
     ]
-    run_cmd(cmd, label="soffice pptx->pdf")
+    try:
+        run_cmd(cmd, label="soffice pptx->pdf")
+    except RuntimeError as exc:
+        raise RuntimeError(_soffice_hint(exc, cmd, profile)) from exc
     pdf = out_dir / (deck.stem + ".pdf")
     if not pdf.exists():
         matches = list(out_dir.glob("*.pdf"))
         if not matches:
-            raise RuntimeError("soffice produced no PDF")
+            raise RuntimeError(f"soffice reported success but produced no PDF in {out_dir}\n"
+                               f"  command: {subprocess.list2cmdline(cmd)}")
         pdf = matches[0]
     return pdf
 
@@ -309,6 +359,29 @@ def load_narration(work: Path) -> tuple[str | None, dict[str, str]]:
     return voice, out
 
 
+def _last_json(text: str) -> dict | None:
+    """The compositor prints its summary as the *last* JSON object on stdout."""
+    lines = text.strip().splitlines()
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].lstrip().startswith("{"):
+            try:
+                return json.loads("\n".join(lines[i:]))
+            except json.JSONDecodeError:
+                return None
+    return None
+
+
+def _missing_manifest_refs(segments: list[dict], work: Path) -> list[tuple[str, str]]:
+    """(id, path) for every file the manifest names but the disk does not have."""
+    out = []
+    for e in segments:
+        for key in ("audio", "srt"):
+            rel = e.get(key)
+            if rel and not (work / rel).exists():
+                out.append((str(e.get("id")), rel))
+    return out
+
+
 def cmd_build(args) -> int:
     work = Path(args.work).resolve()
     sj = work / "slides.json"
@@ -358,13 +431,17 @@ def cmd_build(args) -> int:
     # 1) speech
     tts_script = HERE / "tts_edge.py"
     tts_out = build_dir
-    tts_run = run_cmd([sys.executable, str(tts_script), "--segments", str(seg_path),
-                       "--out", str(tts_out), f"--voice={voice}",
-                       f"--rate={args.rate}", f"--pitch={args.pitch}"],
-                      label="edge-tts", timeout=3600)
+    tts_cmd = [sys.executable, str(tts_script), "--segments", str(seg_path),
+               "--out", str(tts_out), f"--voice={voice}",
+               f"--rate={args.rate}", f"--pitch={args.pitch}"]
+    if args.strict:
+        tts_cmd.append("--strict")
+    tts_run = run_cmd(tts_cmd, label="edge-tts", timeout=3600)
     print((tts_run.stdout or "").strip(), flush=True)
     tts = {str(r["id"]): r for r in json.loads(
         (tts_out / "tts.json").read_text(encoding="utf-8"))}
+    failed = [r for r in tts.values() if r.get("error")]
+    silent = [str(r["id"]) for r in tts.values() if r.get("silent")]
 
     # 2) manifest for the compositor
     man_segments = []
@@ -380,22 +457,52 @@ def cmd_build(args) -> int:
     manifest = {"out": args.out or "course.mp4", "segments": man_segments}
     man_path = work / "manifest.json"
     man_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+    missing_refs = _missing_manifest_refs(man_segments, work)
+    if missing_refs:
+        detail = ", ".join(f"[{sid}] {p}" for sid, p in missing_refs)
+        print(f"  ! manifest points at {len(missing_refs)} missing file(s): {detail} "
+              f"— the render will not be clean", flush=True)
 
     # 3) video
     compose = HERE / "compose.py"
     cmd = [sys.executable, str(compose), "--project", str(work),
            "--resolution", args.resolution, "--fps", str(args.fps),
            "--motion", args.motion, "--transition", args.transition,
-           "--subs", args.subs, "--sub-font", args.sub_font,
+           "--subs", args.subs,
            "--sub-size", str(args.sub_size), "--zoom", str(args.zoom)]
+    if args.sub_font:
+        cmd += ["--sub-font", args.sub_font]
+    # --hold only means something if the compositor hears about it: it is the
+    # duration of a slide without audio, and silently ignoring it made the log lie
+    if "--default-hold" in compose.read_text(encoding="utf-8", errors="replace"):
+        cmd += ["--default-hold", str(args.hold)]
+    else:
+        print("  ! this compose.py has no --default-hold — --hold is ignored, silent "
+              "slides hold for the compositor's own default", flush=True)
     if args.sub_box:
         cmd.append("--sub-box")
     if args.bgm:
         cmd += ["--bgm", str(Path(args.bgm).resolve()), "--music-volume", str(args.music_volume)]
     out = run_cmd(cmd, label="compose", timeout=7200)
-    print(out.stdout.strip())
+    lines = out.stdout.strip().splitlines()
+    cut = next((i for i in range(len(lines) - 1, -1, -1)
+                if lines[i].lstrip().startswith("{")), len(lines))
+    print("\n".join(lines[:cut]).strip(), flush=True)
+    summary = _last_json(out.stdout) or {}
+    if failed:
+        # the video still renders (those pages hold for --hold seconds) but the build
+        # is not clean, and the JSON has to say so — that is what "ok" means
+        print(f"  ! {len(failed)} page(s) produced no audio: "
+              f"{', '.join(str(r['id']) for r in failed)} — they are silent in the video",
+              flush=True)
+        summary["tts_failed"] = [{"id": str(r["id"]), "error": r.get("error")}
+                                 for r in failed]
+        summary["ok"] = False
+    if silent:
+        summary["silent_slides"] = silent
+    print(json.dumps(summary, ensure_ascii=False, indent=1) if summary else out.stdout.strip())
     if empty:
-        print(f"  ! slides without narration (silent, {args.hold:.0f}s hold): {empty}")
+        print(f"  ! slides without narration (silent, {args.hold:g}s hold each): {empty}")
     return 0
 
 
@@ -447,8 +554,9 @@ def main(argv=None) -> int:
     ap.add_argument("--motion", default="kenburns", choices=["kenburns", "none"])
     ap.add_argument("--transition", default="fade", choices=["fade", "none"])
     ap.add_argument("--subs", default="burn", choices=["burn", "soft", "none"])
-    ap.add_argument("--sub-font", default="Microsoft YaHei",
-                    help="subtitle font (Noto Sans CJK SC on Linux, PingFang SC on macOS)")
+    ap.add_argument("--sub-font", default=None,
+                    help="subtitle font family (default: this platform's CJK font; "
+                         "compose.py warns and substitutes when it is not installed)")
     ap.add_argument("--sub-size", type=int, default=21)
     ap.add_argument("--sub-box", action="store_true",
                     help="translucent band behind subtitles (slides with bottom-heavy content)")
@@ -456,11 +564,15 @@ def main(argv=None) -> int:
                     help="kenburns end zoom; use --motion none for full-bleed decks")
     ap.add_argument("--bgm", default=None)
     ap.add_argument("--music-volume", type=float, default=0.12)
-    ap.add_argument("--hold", type=float, default=5.0, help="seconds for slides with no narration")
+    ap.add_argument("--hold", type=float, default=5.0,
+                    help="seconds a slide without audio stays on screen (default 5)")
     ap.add_argument("--out", default=None, help="output filename inside the work dir")
     ap.add_argument("--dry-run", action="store_true", help="stop before TTS/video")
     ap.add_argument("--allow-silent", action="store_true",
                     help="build even when narration.json is missing (silent slideshow)")
+    ap.add_argument("--strict", action="store_true",
+                    help="stop at the first page edge-tts refuses (default: keep the other "
+                         "pages, render the video, and report ok:false)")
     args = ap.parse_args(normalize_argv(sys.argv[1:] if argv is None else argv))
 
     try:

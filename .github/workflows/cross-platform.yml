@@ -1,0 +1,215 @@
+﻿name: cross-platform
+
+# Real Linux + macOS evidence, not inference:
+#   compose      → deterministic, no network: ffmpeg/libass, CJK font discovery,
+#                  paths that contain a space and CJK characters, global SRT timing
+#   full-pipeline → the actual product path: LibreOffice → PNG, edge-tts → mp3 + word
+#                  timings, compose → course.mp4
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PYTHONIOENCODING: utf-8
+  PYTHONUTF8: "1"
+
+jobs:
+  compose:
+    name: compose · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ffmpeg (+ a CJK font on Linux)
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg fonts-noto-cjk
+          else
+            brew install ffmpeg
+          fi
+
+      - name: ffmpeg can actually do this job
+        run: |
+          set -e
+          ffmpeg -hide_banner -filters  | grep -w subtitles
+          ffmpeg -hide_banner -filters  | grep -w zoompan
+          ffmpeg -hide_banner -encoders | grep -w libx264
+          ffmpeg -hide_banner -encoders | grep -w aac
+          ffmpeg -version | head -1
+
+      - name: Build a project whose paths contain a space and CJK
+        run: |
+          set -e
+          proj="ci test/课件"
+          mkdir -p "$proj/png" "$proj/sub" "$proj/audio"
+          for n in 01 02; do
+            ffmpeg -y -hide_banner -loglevel error -f lavfi -i "color=c=white:s=1280x720" -frames:v 1 "$proj/png/slide_$n.png"
+            ffmpeg -y -hide_banner -loglevel error -f lavfi -i "anullsrc=r=48000:cl=stereo" -t 3 -c:a aac "$proj/audio/$n.m4a"
+          done
+          printf '1\n00:00:00,000 --> 00:00:01,400\n第一行中文字幕\n\n2\n00:00:01,500 --> 00:00:02,900\n第二行字幕，带逗号\n\n' > "$proj/sub/01.srt"
+          cp "$proj/sub/01.srt" "$proj/sub/02.srt"
+          cat > "$proj/manifest.json" <<'JSON'
+          {
+            "segments": [
+              {"id": "01", "image": "png/slide_01.png", "audio": "audio/01.m4a",
+               "srt": "sub/01.srt", "duration": 3.0},
+              {"id": "02", "image": "png/slide_02.png", "audio": "audio/02.m4a",
+               "srt": "sub/02.srt", "duration": 3.0}
+            ]
+          }
+          JSON
+
+      - name: Compose (burned-in subtitles, ken-burns, fade)
+        run: |
+          set -euo pipefail
+          python scripts/compose.py --project "ci test/课件" \
+            --resolution 1280x720 --motion kenburns --transition fade | tee compose.log
+
+      - name: Assert the output is what we asked for
+        run: |
+          python - <<'PY'
+          import json, pathlib, subprocess, sys
+
+          proj = pathlib.Path("ci test/课件")
+          out = proj / "course.mp4"
+          assert out.exists(), "compose produced no course.mp4"
+
+          # the compositor prints its summary as the last JSON object on stdout
+          text = pathlib.Path("compose.log").read_text(encoding="utf-8-sig")
+          lines = text.strip().splitlines()
+          summary = None
+          for i in range(len(lines) - 1, -1, -1):
+              if lines[i].lstrip().startswith("{"):
+                  try:
+                      summary = json.loads("\n".join(lines[i:]))
+                  except json.JSONDecodeError:
+                      summary = None
+                  if summary:
+                      break
+          assert summary, "no JSON summary"
+          assert summary.get("ok") is True, summary
+          assert summary.get("segments") == 2, summary
+          assert summary.get("srt_cues", 0) >= 4, summary
+          font = summary.get("sub_font", "")
+          assert font, "no font was chosen"
+          print("chosen subtitle font:", font)
+
+          def probe(entries, f):
+              return subprocess.check_output(
+                  ["ffprobe", "-v", "error", "-show_entries", entries, "-of", "csv=p=0", str(f)],
+                  text=True).strip()
+
+          dur = float(probe("format=duration", out))
+          expected = 2 * (3.0 + 0.7)  # hold + tail per segment
+          print(f"duration {dur:.3f}s (expected ~{expected:.1f}s)")
+          assert abs(dur - expected) < 1.5, dur
+
+          stream = subprocess.check_output(
+              ["ffprobe", "-v", "error", "-show_entries",
+               "stream=codec_name,width,height", "-of", "csv=p=0", str(out)],
+              text=True).strip().splitlines()
+          print("streams:", stream)
+          assert any("h264" in s for s in stream), stream
+          assert any("1280" in s and "720" in s for s in stream), stream
+          assert any("aac" in s for s in stream), stream
+
+          # a frame that actually carries the burned-in subtitles
+          frame = proj / "check.png"
+          subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                          "-ss", "1.5", "-i", str(out), "-frames:v", "1", str(frame)],
+                         check=True)
+          assert frame.stat().st_size > 2000, "the extracted frame looks blank"
+          print("frame bytes:", frame.stat().st_size)
+          print("COMPOSE OK")
+          PY
+
+      - name: A missing font must be substituted, never burned as empty boxes
+        run: |
+          out=$(python scripts/compose.py --project "ci test/课件" \
+                  --resolution 1280x720 --motion none --sub-font "Zz No Such Font" 2>&1)
+          echo "$out" | tail -20
+          echo "$out" | grep -E "not installed — using|no CJK font installed"
+
+  full-pipeline:
+    name: full pipeline · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ffmpeg, LibreOffice, CJK fonts
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg fonts-noto-cjk libreoffice-impress
+          else
+            brew install ffmpeg
+            brew install --cask libreoffice
+          fi
+
+      - name: Python dependencies
+        run: python -m pip install --quiet edge-tts pymupdf python-pptx
+
+      - name: Doctor must say the full pipeline is ready
+        run: |
+          set -euo pipefail
+          python scripts/doctor.py --no-net | tee doctor.json
+          python - <<'PY'
+          import json, pathlib
+          report = json.loads(pathlib.Path("doctor.json").read_text(encoding="utf-8-sig"))
+          print("ready:", report["ready"])
+          assert report["ready"]["full_pipeline"] is True, report
+          PY
+
+      - name: Extract the demo deck
+        run: python scripts/make_course.py extract --deck examples/demo.pptx --work "$RUNNER_TEMP/build" --dpi 100
+
+      - name: Write the narration (the shipped example script)
+        run: cp examples/narration.example.json "$RUNNER_TEMP/build/narration.json"
+
+      - name: Build (LibreOffice → PNG → edge-tts → course.mp4)
+        run: |
+          set -euo pipefail
+          python scripts/make_course.py build --work "$RUNNER_TEMP/build" \
+            --resolution 1280x720 --motion none | tee build.log
+
+      - name: Assert the demo builds the same shape as on Windows
+        run: |
+          python - <<'PY'
+          import json, pathlib
+
+          text = pathlib.Path("build.log").read_text(encoding="utf-8-sig")
+          lines = text.strip().splitlines()
+          summary = None
+          for i in range(len(lines) - 1, -1, -1):
+              if lines[i].lstrip().startswith("{"):
+                  try:
+                      summary = json.loads("\n".join(lines[i:]))
+                  except json.JSONDecodeError:
+                      summary = None
+                  if summary:
+                      break
+          assert summary, "no JSON summary"
+          print(json.dumps(summary, ensure_ascii=False, indent=1))
+          assert summary.get("ok") is True, summary
+          assert summary.get("srt_cues", 0) > 0, "no subtitles: word timings were lost"
+          print("FULL PIPELINE OK")
+          PY

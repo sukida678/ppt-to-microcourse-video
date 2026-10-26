@@ -113,6 +113,11 @@ def convert_to_pdf(src: Path, workdir: Path, converter: str, soffice: str | None
     if converter in ("auto", "soffice"):
         exe = find_soffice(soffice)
         if exe:
+            # No -env:UserInstallation here on purpose: this call lets soffice use the
+            # user's own profile, so nothing is parsed as a URI and a path with spaces
+            # cannot break it (the failure mode make_course.profile_uri() exists for).
+            # Trade-off: a running LibreOffice GUI therefore *can* lock us out, which
+            # is why make_course passes an isolated profile when it owns the work dir.
             res = run([exe, "--headless", "--norestore", "--convert-to", "pdf",
                        "--outdir", str(workdir), str(src)])
             if out_pdf.exists() and out_pdf.stat().st_size > 0:

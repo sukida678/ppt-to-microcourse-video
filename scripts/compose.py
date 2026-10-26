@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -55,7 +56,107 @@ def safe_stdio() -> None:
 safe_stdio()
 
 
-def sub_style(font: str = "Microsoft YaHei", size: int = 21, box: bool = False) -> str:
+def default_sub_font() -> str:
+    """The CJK family that exists out of the box on this platform."""
+    if os.name == "nt":
+        return "Microsoft YaHei"
+    if sys.platform == "darwin":
+        return "PingFang SC"
+    return "Noto Sans CJK SC"
+
+
+CJK_FONT_CANDIDATES = (
+    "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC",
+    "Hiragino Sans GB", "WenQuanYi Micro Hei", "SimHei", "SimSun", "DengXian",
+)
+
+# family -> files shipped with Windows; a family we cannot map stays "unknown"
+WIN_FONT_FILES = {
+    "microsoft yahei": ("msyh.ttc", "msyh.ttf", "msyhbd.ttc", "msyhl.ttc"),
+    "微软雅黑": ("msyh.ttc", "msyh.ttf", "msyhbd.ttc", "msyhl.ttc"),
+    "simhei": ("simhei.ttf",),
+    "黑体": ("simhei.ttf",),
+    "simsun": ("simsun.ttc",),
+    "宋体": ("simsun.ttc",),
+    "dengxian": ("deng.ttf", "dengb.ttf", "dengl.ttf"),
+    "等线": ("deng.ttf", "dengb.ttf", "dengl.ttf"),
+    "fangsong": ("simfang.ttf",),
+    "仿宋": ("simfang.ttf",),
+    "kaiti": ("simkai.ttf",),
+    "楷体": ("simkai.ttf",),
+    "microsoft jhenghei": ("msjh.ttc", "msjhbd.ttc"),
+    "arial": ("arial.ttf", "arialbd.ttf"),
+    "times new roman": ("times.ttf", "timesbd.ttf"),
+    "calibri": ("calibri.ttf", "calibrib.ttf"),
+    "segoe ui": ("segoeui.ttf", "segoeuib.ttf"),
+    "tahoma": ("tahoma.ttf", "tahomabd.ttf"),
+    "verdana": ("verdana.ttf",),
+    "georgia": ("georgia.ttf",),
+    "consolas": ("consola.ttf", "consolab.ttf"),
+    "courier new": ("cour.ttf",),
+}
+
+
+def font_available(family: str) -> bool | None:
+    """Is `family` installed? None means this platform gives us no way to tell.
+
+    libass falls back **silently**: a missing family renders every CJK glyph as an
+    empty box and ffmpeg still exits 0, so the only honest answer is "checked" or
+    "unknown", never a guess in between.
+    """
+    fam = family.strip().lower()
+    if not fam:
+        return None
+    if os.name == "nt":
+        fonts = Path(os.environ.get("WINDIR") or os.environ.get("SystemRoot") or r"C:\Windows") / "Fonts"
+        if not fonts.is_dir():
+            return None
+        names = {p.name.lower() for p in fonts.iterdir()}
+        flat = fam.replace(" ", "")
+        for key, files in WIN_FONT_FILES.items():
+            if key in fam or flat in key.replace(" ", ""):
+                return any(f in names for f in files)
+        # not a family we know by name: Windows keeps the *file* named after the font,
+        # so compare stems exactly ("Noto Sans SC" is NotoSansSC-VF.ttf; "Noto Sans CJK
+        # SC" is a different family and must not be mistaken for it)
+        token = re.sub(r"[^a-z0-9]", "", flat)
+        stems = {n.split(".")[0].split("-")[0] for n in names}
+        return bool(token) and token in stems
+    if sys.platform == "darwin":
+        # PingFang/Hiragino live in .ttc bundles whose *file* name is the family
+        for d in (Path("/System/Library/Fonts"), Path("/System/Library/Fonts/Supplemental"),
+                  Path("/Library/Fonts")):
+            if d.is_dir() and any(fam.replace(" ", "") in p.name.lower().replace(" ", "")
+                                  for p in d.iterdir()):
+                return True
+        return None
+    exe = shutil.which("fc-list")
+    if not exe:
+        return None
+    try:
+        out = subprocess.run([exe, ":f", "family"], capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return fam.replace(" ", "") in out.stdout.lower().replace(" ", "")
+
+
+def pick_sub_font(requested: str) -> tuple[str, str | None, bool]:
+    """(font to use, message, fatal) — swap a missing family for one that is installed."""
+    if font_available(requested) is not False:
+        return requested, None, False
+    for cand in CJK_FONT_CANDIDATES:
+        if font_available(cand):
+            return cand, (f"subtitle font '{requested}' is not installed — "
+                          f"using '{cand}'"), False
+    return requested, (f"no CJK font installed (tried {requested} and "
+                       f"{', '.join(CJK_FONT_CANDIDATES[1:4])}…) — burned-in subtitles "
+                       f"will show empty boxes"), True
+
+
+def sub_style(font: str | None = None, size: int = 21, box: bool = False) -> str:
     """libass style for burned-in subtitles.
 
     ffmpeg assumes a 384x288 script when the SRT carries no header, so every value
@@ -65,6 +166,7 @@ def sub_style(font: str = "Microsoft YaHei", size: int = 21, box: bool = False) 
     box=True draws a translucent band behind the text (BorderStyle=3) — use it when
     the slides have content near the bottom edge and plain outlined text collides.
     """
+    font = font or default_sub_font()
     common = f"FontName={font},FontSize={size},PrimaryColour=&H00FFFFFF,Alignment=2,MarginV=32,Bold=0"
     if box:
         return common + ",BorderStyle=3,OutlineColour=&H73000000,Outline=1.2,Shadow=0"
@@ -84,6 +186,23 @@ def run(cmd, cwd=None, timeout=1800):
         tail = (res.stderr or "").strip().splitlines()[-12:]
         raise RuntimeError("ffmpeg failed:\n" + "\n".join(tail))
     return res
+
+
+SAFE_FILTER_PATH = re.compile(r"^[A-Za-z0-9._/\-]+$")
+
+
+def filter_escape(value: str) -> str:
+    """Escape a value that ends up inside `subtitles=…` in a filtergraph.
+
+    ffmpeg splits a filtergraph on `;`, options on `:`, and the `subtitles` filter
+    then hands its path to libass. A Windows path (`D:/x/y.srt`) therefore dies with
+    `Unable to parse option value "D:/x/y.srt" as image size`, and a folder that
+    happens to contain `,` `[` `]` breaks the graph itself. Escape in that order.
+    """
+    for ch, rep in (("\\", "\\\\"), ("'", "\\'"), (":", "\\:"), (",", "\\,"),
+                    ("[", "\\["), ("]", "\\]"), (";", "\\;")):
+        value = value.replace(ch, rep)
+    return value
 
 
 def video_filter(w: int, h: int, fps: int, dur: float, motion: str,
@@ -116,6 +235,17 @@ def video_filter(w: int, h: int, fps: int, dur: float, motion: str,
     return ",".join(parts)
 
 
+def seg_duration(seg: dict, args) -> float:
+    """How long this segment lives in the final video — the one source of truth.
+
+    `build_part` gives it to ffmpeg and `write_global_srt` advances its offset by it.
+    While the two disagreed (the writer used the bare audio length) every slide's
+    subtitles were `--tail` seconds early and the error accumulated down the film.
+    """
+    hold = float(seg.get("duration") or 0.0)
+    return max(args.min_duration, hold + args.tail) if hold > 0 else args.default_hold
+
+
 def build_part(seg: dict, idx: int, project: Path, parts_dir: Path, args,
                w: int, h: int) -> Path:
     img = (project / seg["image"]).resolve()
@@ -125,15 +255,28 @@ def build_part(seg: dict, idx: int, project: Path, parts_dir: Path, args,
     if audio is not None and not audio.exists():
         audio = None
 
-    hold = float(seg.get("duration") or 0.0)
-    dur = max(args.min_duration, hold + args.tail) if hold > 0 else args.default_hold
+    dur = seg_duration(seg, args)
 
     srt_rel = None
     if args.subs == "burn" and seg.get("srt"):
         srt_abs = (project / seg["srt"]).resolve()
         if srt_abs.exists() and srt_abs.stat().st_size > 0:
-            # relative path (relative to project) dodges Windows drive-colon escaping
-            srt_rel = Path(seg["srt"]).as_posix()
+            try:
+                # the filter reads it relative to the ffmpeg cwd (--project), which keeps
+                # drive letters out of the filtergraph altogether
+                rel = srt_abs.relative_to(project).as_posix()
+            except ValueError:
+                # the pre-flight scan already reported this one page by page
+                pass
+            else:
+                if not SAFE_FILTER_PATH.match(rel):
+                    # quotes, commas, brackets, spaces: every one of them is a parsing
+                    # trap inside a filtergraph. Copy the cue file next to the parts under
+                    # a dead-simple name instead of trying to escape into the void.
+                    safe = parts_dir / f"sub_{idx:02d}.srt"
+                    shutil.copyfile(srt_abs, safe)
+                    rel = f"{parts_dir.name}/{safe.name}"
+                srt_rel = filter_escape(rel)
 
     out = parts_dir / f"part_{idx:02d}.mp4"
     cmd = [ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
@@ -182,19 +325,18 @@ def fmt_ts(sec: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def write_global_srt(segs: list[dict], project: Path, out: Path) -> int:
+def write_global_srt(segs: list[dict], project: Path, out: Path, args) -> int:
     cues: list[tuple[float, float, str]] = []
     offset = 0.0
     count = 0
     for seg in segs:
-        hold = float(seg.get("duration") or 0.0)
         if seg.get("srt"):
             p = (project / seg["srt"]).resolve()
             if p.exists():
                 for a, b, body in parse_srt(p):
                     cues.append((a + offset, b + offset, body))
                     count += 1
-        offset += max(0.0, hold)
+        offset += seg_duration(seg, args)
     if not cues:
         return 0
     with open(out, "w", encoding="utf-8") as fh:
@@ -212,8 +354,9 @@ def main(argv=None) -> int:
     ap.add_argument("--transition", default="fade", choices=["fade", "none"])
     ap.add_argument("--fade", type=float, default=0.35)
     ap.add_argument("--subs", default="burn", choices=["burn", "soft", "none"])
-    ap.add_argument("--sub-font", default="Microsoft YaHei",
-                    help="subtitle font family (Noto Sans CJK SC on Linux, PingFang SC on mac)")
+    ap.add_argument("--sub-font", default=None,
+                    help="subtitle font family (default: this platform's CJK font — "
+                         "Microsoft YaHei / PingFang SC / Noto Sans CJK SC)")
     ap.add_argument("--sub-size", type=int, default=21, help="subtitle font size (libass units)")
     ap.add_argument("--sub-box", action="store_true",
                     help="draw a translucent band behind subtitles (for slides with "
@@ -258,6 +401,46 @@ def main(argv=None) -> int:
 
     print(f"  composing {len(segs)} segment(s) at {w}x{h}@{args.fps}fps "
           f"(motion={args.motion}, transition={args.transition}, subs={args.subs})", flush=True)
+
+    # A manifest entry that *promises* audio or a subtitle file and then does not find
+    # it is a broken build, not a quiet slide: say which page, and say that the render
+    # is incomplete instead of handing back a silent film with ok:true.
+    warnings: list[str] = []
+    silent_ids: list[str] = []
+    unsub_ids: list[str] = []
+
+    # libass silently substitutes a missing family, so a typo or a Linux box without
+    # Noto yields a film full of empty boxes and exit 0. Check the family up front.
+    font, font_msg, font_fatal = pick_sub_font(args.sub_font or default_sub_font())
+    args.sub_font = font
+    if font_msg:
+        print(f"  ! {font_msg}", flush=True)
+        if font_fatal:
+            warnings.append(font_msg)
+    for seg in segs:
+        sid = seg.get("id")
+        if seg.get("audio") and not (project / seg["audio"]).resolve().exists():
+            text = f"[{sid}] audio missing: {seg['audio']} — that slide will be silent"
+            print(f"  ! {text}", flush=True)
+            warnings.append(text)
+            silent_ids.append(sid)
+        if seg.get("srt") and args.subs in ("burn", "soft"):
+            p = (project / seg["srt"]).resolve()
+            text = ""
+            if not p.exists() or p.stat().st_size == 0:
+                why = "empty" if p.exists() else "missing"
+                text = f"[{sid}] subtitle file {why}: {seg['srt']} — that slide gets no subtitles"
+            elif args.subs == "burn":
+                try:
+                    p.relative_to(project)
+                except ValueError:
+                    text = (f"[{sid}] subtitle file lives outside --project: {seg['srt']} "
+                            f"— not burned in")
+            if text:
+                print(f"  ! {text}", flush=True)
+                warnings.append(text)
+                unsub_ids.append(sid)
+
     parts = []
     for i, seg in enumerate(segs, start=1):
         parts.append(build_part(seg, i, project, parts_dir, args, w, h))
@@ -292,10 +475,10 @@ def main(argv=None) -> int:
     srt_count = 0
     if args.subs in ("soft", "burn"):
         srt_out = project / (out_path.stem + ".srt")
-        srt_count = write_global_srt(segs, project, srt_out)
+        srt_count = write_global_srt(segs, project, srt_out, args)
 
     summary = {
-        "ok": True,
+        "ok": not warnings,
         "output": str(out_path),
         "size_mb": round(out_path.stat().st_size / 1048576, 2),
         "segments": len(parts),
@@ -303,8 +486,15 @@ def main(argv=None) -> int:
         "fps": args.fps,
         "srt_cues": srt_count,
         "srt": str(project / (out_path.stem + ".srt")) if srt_count else None,
+        "sub_font": args.sub_font,
         "manifest": str(man_path),
     }
+    if warnings:
+        summary["warnings"] = warnings
+        summary["silent_slides"] = silent_ids
+        summary["unsubtitled_slides"] = unsub_ids
+        print(f"  ! render incomplete: {len(warnings)} problem(s) — see warnings above",
+              flush=True)
     print(json.dumps(summary, ensure_ascii=False, indent=1))
     return 0
 

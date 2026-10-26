@@ -4,9 +4,13 @@
     python doctor.py            # report only
     python doctor.py --fix      # pip-install the missing python packages
     python doctor.py --no-net   # skip the edge-tts network probe
+    python doctor.py --strict   # also fail when only the images/PDF pipeline can run
 
-Exit code 0 when the pipeline can run, 1 when a blocker remains.
-Prints a single JSON object so an agent can parse it.
+Exit code 0 when the video pipeline can run for the input you have (slides as
+PNG/PDF, or a .pptx only if LibreOffice is present), 1 when a blocker remains.
+`--strict` additionally requires `ready.full_pipeline`, i.e. LibreOffice found.
+The JSON always tells you which one is true (`ready.images_to_video` /
+`ready.full_pipeline`), so a missing LibreOffice is reported, not hidden.
 """
 from __future__ import annotations
 
@@ -14,6 +18,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -21,17 +26,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from make_course import find_soffice  # noqa: E402
+# one authoritative dependency list: install.py is what the user runs to set the
+# machine up, so doctor must not disagree with it about what is required
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from install import MODULE_ALIASES, PY_PKGS  # noqa: E402
 
-PY_DEPS = {
-    "pymupdf": ("pymupdf", "pdf -> png rendering"),
-    "pptx": ("python-pptx", "slide text / speaker notes"),
-    "edge_tts": ("edge-tts", "free neural text-to-speech"),
-}
+PY_DEPS = {mod: (pkg, why) for mod, pkg, why in PY_PKGS}
 
 
 def has_module(name: str) -> bool:
     """`pymupdf` is importable as `pymupdf` (new) or `fitz` (legacy shim, warns)."""
-    candidates = ("pymupdf", "fitz") if name == "pymupdf" else (name,)
+    candidates = MODULE_ALIASES.get(name, (name,))
     for mod in candidates:
         try:
             if importlib.util.find_spec(mod) is not None:
@@ -48,6 +53,18 @@ def bin_version(exe: str, args=("-version",)) -> str | None:
         return text[0].strip() if text else "?"
     except Exception:
         return None
+
+
+def ffmpeg_has(ff: str, flag: str, name: str) -> bool | None:
+    """Does this ffmpeg build provide `-flag` entry `name`? None when the query failed."""
+    try:
+        res = subprocess.run([ff, "-hide_banner", flag], capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if res.returncode != 0:
+        return None
+    return re.search(rf"\b{re.escape(name)}\b", res.stdout or "") is not None
 
 
 def pip_install(pkgs: list[str]) -> tuple[bool, str]:
@@ -83,6 +100,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Check the ppt-to-microcourse pipeline")
     ap.add_argument("--fix", action="store_true", help="pip install missing packages")
     ap.add_argument("--no-net", action="store_true")
+    ap.add_argument("--strict", action="store_true",
+                    help="exit 1 unless the full pipeline can run (LibreOffice present)")
     args = ap.parse_args(argv)
 
     report: dict = {"python": sys.version.split()[0], "python_exe": sys.executable,
@@ -119,6 +138,50 @@ def main(argv=None) -> int:
     if ff and not fp:
         report["blockers"].append("ffprobe not on PATH (usually ships with ffmpeg)")
 
+    # `which ffmpeg` only proves a binary exists. A build without libass cannot burn a
+    # single subtitle and one without libx264 cannot encode the parts — both blow up
+    # two minutes into the render, not here.
+    if ff:
+        caps = {}
+        for flag, name, what in (("-filters", "subtitles", "burned-in subtitles (libass)"),
+                                 ("-encoders", "libx264", "H.264 part encoding"),
+                                 ("-encoders", "aac", "AAC audio")):
+            has = ffmpeg_has(ff, flag, name)
+            caps[name] = has
+            if has is False:
+                report["blockers"].append(
+                    f"this ffmpeg has no {name} → no {what}; install a full build "
+                    f"(Gyan.FFmpeg / brew install ffmpeg / apt install ffmpeg)")
+        checks["ffmpeg_capabilities"] = {"ok": all(v is not False for v in caps.values()), **caps}
+
+        # libass silently substitutes a wrong/missing font and burns empty boxes
+        ffmpeg_compose = Path(__file__).resolve().parent / "compose.py"
+        if ffmpeg_compose.exists():
+            try:
+                sys.path.insert(0, str(ffmpeg_compose.parent))
+                from compose import default_sub_font, pick_sub_font  # noqa: PLC0415
+            except Exception as exc:  # noqa: BLE001
+                checks["subtitle_font"] = {"ok": None, "detail": f"font probe unavailable: {exc}"}
+            else:
+                family, font_msg, font_fatal = pick_sub_font(default_sub_font())
+                checks["subtitle_font"] = {"ok": not font_fatal, "family": family,
+                                           "message": font_msg}
+                if font_fatal:
+                    report["blockers"].append(font_msg)
+                elif font_msg:
+                    report["warnings"].append(font_msg)
+
+    try:
+        free_gb = shutil.disk_usage(Path.cwd()).free / 1024 ** 3
+    except OSError as exc:
+        checks["disk"] = {"ok": None, "detail": str(exc)}
+    else:
+        checks["disk"] = {"ok": free_gb >= 4, "free_gb": round(free_gb, 1)}
+        if free_gb < 4:
+            report["warnings"].append(
+                f"only {free_gb:.1f} GB free in {Path.cwd()} — a 41-slide 1080p render "
+                f"needs roughly 2–4 GB of temporary files")
+
     so = find_soffice()
     checks["libreoffice"] = {"ok": bool(so), "path": so}
     if so:
@@ -147,6 +210,8 @@ def main(argv=None) -> int:
         "images_to_video": report["ok"],
     }
     print(json.dumps(report, ensure_ascii=False, indent=1))
+    if args.strict and not report["ready"]["full_pipeline"]:
+        return 1
     return 0 if report["ok"] else 1
 
 

@@ -49,7 +49,6 @@ PY_PKGS = [
     # PyMuPDF renamed its import to `pymupdf`; `fitz` still ships as a shim that warns
     # on import, so try the new name first and never import the shim needlessly.
     ("pymupdf", "pymupdf", "PDF / slide rasterising"),
-    ("PIL", "pillow", "image checks"),
     ("pptx", "python-pptx", "speaker notes + text extraction fallback"),
 ]
 
@@ -90,6 +89,21 @@ def find_soffice() -> str | None:
     return None
 
 
+def install_hint(tool: str) -> str:
+    """Platform-correct install command — `winget` is Windows-only and useless on a Mac."""
+    win, mac = sys.platform == "win32", sys.platform == "darwin"
+    hints = {
+        "ffmpeg": ("winget install Gyan.FFmpeg",
+                   "brew install ffmpeg",
+                   "sudo apt install ffmpeg   (or: sudo dnf install ffmpeg)"),
+        "soffice": ("winget install TheDocumentFoundation.LibreOffice",
+                    "brew install --cask libreoffice",
+                    "sudo apt install libreoffice-impress   (or: sudo dnf install libreoffice)"),
+    }
+    w, m, l = hints[tool]
+    return w if win else (m if mac else l)
+
+
 def have_module(mod: str) -> bool:
     return any(importlib.util.find_spec(m) is not None
                for m in MODULE_ALIASES.get(mod, (mod,)))
@@ -121,8 +135,8 @@ def check() -> dict:
         })
 
     for exe, why, fix in (
-        ("ffmpeg", "video encoding", "winget install Gyan.FFmpeg"),
-        ("ffprobe", "duration / stream checks", "winget install Gyan.FFmpeg"),
+        ("ffmpeg", "video encoding", install_hint("ffmpeg")),
+        ("ffprobe", "duration / stream checks", install_hint("ffmpeg")),
     ):
         path = shutil.which(exe)
         rows.append({
@@ -141,7 +155,7 @@ def check() -> dict:
         "ok": bool(so),
         "version": so or "",
         "why": "PPTX → images (optional: PDF or PNG input works without it)",
-        "fix": "winget install TheDocumentFoundation.LibreOffice",
+        "fix": install_hint("soffice"),
     })
 
     required = [r for r in rows if r["name"] != "soffice"]
@@ -199,7 +213,7 @@ def main() -> int:
 
     if result["pipeline_ready"] and not result["libreoffice"]:
         print("\nPipeline ready, but no LibreOffice: PPTX cannot be rasterised.")
-        print("Either install it (winget install TheDocumentFoundation.LibreOffice),")
+        print(f"Either install it ({install_hint('soffice')}),")
         print("or have the deck exported to PDF / PNG and use that instead — AGENTS.md §8.")
         return 0
 

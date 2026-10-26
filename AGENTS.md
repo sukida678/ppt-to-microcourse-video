@@ -67,12 +67,12 @@ Prints JSON. Continue only when `ready.full_pipeline` is `true`.
 
 | blocker | fix |
 |---|---|
-| python package missing | `pip install edge-tts pymupdf pillow python-pptx` |
+| python package missing | `pip install edge-tts pymupdf python-pptx` |
 | `ffmpeg` missing | Windows `winget install Gyan.FFmpeg` · macOS `brew install ffmpeg` · Linux `apt install ffmpeg` (or `dnf`) |
 | `soffice` (LibreOffice) missing | Windows `winget install TheDocumentFoundation.LibreOffice` · macOS `brew install --cask libreoffice` · Linux `apt install libreoffice-impress` |
 | TTS probe fails (403/timeout) | network blocked. Try later, or see §7 "no TTS". |
 
-`python scripts/doctor.py --no-net` skips the TTS network probe.
+`python scripts/doctor.py --no-net` skips the TTS network probe. Its exit code is 0 when the pipeline can run for the input you have (PNG/PDF slides); add `--strict` to exit 1 unless the full `.pptx` pipeline can run (LibreOffice present).
 
 **Only LibreOffice missing is survivable**: ask the user to export the deck to PDF (or
 PNG images) and use §8 instead. Everything else must be fixed first.
@@ -156,7 +156,7 @@ Prints a JSON summary ending in `output`, `size_mb`, `srt_cues`.
 | `--zoom` | `1.06` | lower to `1.03` for a subtler push-in; never above 1.08 |
 | `--sub-box` | off | slides with content near the bottom edge — draws a translucent band so the subtitle stops fighting the deck's own text |
 | `--subs` | `burn` | `soft` to keep subtitles as a sidecar `.srt` only, `none` to skip |
-| `--sub-font` | `Microsoft YaHei` | Linux `Noto Sans CJK SC`, macOS `PingFang SC` — the wrong font burns empty boxes |
+| `--sub-font` | platform CJK font | Windows `Microsoft YaHei`, macOS `PingFang SC`, Linux `Noto Sans CJK SC`; a family that is not installed is replaced (`! subtitle font … not installed — using …`) instead of burning boxes |
 | `--bgm` | — | background music, mixed under the voice (`--music-volume 0.12`) |
 | `--hold` | `5.0` | seconds a silent slide stays up |
 
@@ -204,7 +204,7 @@ videos.
 | `UnicodeEncodeError: 'gbk' codec can't encode '\u03a2'` right after the TTS lines | a non-ASCII `--work` path: the child wrote cp936 while we decoded UTF-8 (`微` = `CE A2` = U+03A2, a legal code point) | fixed by `safe_stdio()`; on an old copy use an ASCII path or set `PYTHONIOENCODING=utf-8` |
 | `argument --rate: expected one argument` | `-8%` looks like an option | write `--rate=-8%` (scripts also normalise this) |
 | `srt_cues: 0` | edge-tts returned no word boundaries | check `python -c "import edge_tts;print(edge_tts.__version__)"`; subtitles are rebuilt from word timings, so a version skew here silently kills them |
-| CJK subtitles render as empty boxes | font missing | pass `--sub-font` with a font that actually exists on the machine |
+| CJK subtitles render as empty boxes | font missing | `compose.py` now checks the family and substitutes an installed one (`! subtitle font 'X' is not installed — using 'Y'`); pass `--sub-font` to choose |
 | `ffmpeg not found on PATH` | not installed / not on PATH | see §1 |
 | `soffice` not found | LibreOffice missing or non-standard path | pass `--soffice "C:\Program Files\LibreOffice\program\soffice.exe"` |
 | LibreOffice conversion fails while the GUI is open | profile lock | close LibreOffice and retry |

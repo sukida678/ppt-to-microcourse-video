@@ -60,16 +60,24 @@ def safe_stdio() -> None:
 safe_stdio()
 
 
-def ffprobe_duration(path: Path) -> float:
+def ffprobe_duration(path: Path) -> float | None:
+    """Duration in seconds, or None when ffprobe cannot tell us.
+
+    Returning 0.0 here used to make the page render as a `--hold`-second silent slide
+    while the log said everything was fine — None forces the caller to decide.
+    """
     try:
-        out = subprocess.run(
+        res = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
              "-of", "default=nw=1:nk=1", str(path)],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
-        ).stdout.strip()
-        return float(out)
-    except Exception:
-        return 0.0
+        )
+        if res.returncode != 0:
+            return None
+        text = (res.stdout or "").strip()
+        return float(text) if text else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
 
 
 def fmt_ts(sec: float) -> str:
@@ -78,6 +86,40 @@ def fmt_ts(sec: float) -> str:
     m, ms = divmod(ms, 60000)
     s, ms = divmod(ms, 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def is_speakable(text: str) -> bool:
+    """True when edge-tts has something to pronounce in `text`.
+
+    A narration line made only of punctuation ("……", "——", "？！") is a *silent*
+    slide, not an error: the service answers `No audio was received` and three
+    retries later the whole build died. Two characters is the cut-off because a
+    lone glyph is not a sentence either.
+    """
+    return len(PUNCT_RE.sub("", text or "")) >= 2
+
+
+def hard_wrap(line: str, max_chars: int) -> list[str]:
+    """Split a clause that punctuation never broke, preferring spaces and word edges."""
+    limit = max(4, int(max_chars))
+    pieces: list[str] = []
+    rest = line
+    while len(rest) > limit * 1.5:
+        cut = limit
+        space = rest.rfind(" ", 0, limit + 1)
+        if space >= limit // 2:
+            cut = space
+        elif re.match(r"[A-Za-z0-9]", rest[cut - 1]) and cut < len(rest) \
+                and re.match(r"[A-Za-z0-9]", rest[cut]):
+            # never cut an ASCII word in half: walk forward to its end if that is close
+            nxt = re.search(r"[^A-Za-z0-9]", rest[cut:])
+            if nxt and cut + nxt.start() <= int(limit * 1.5):
+                cut = cut + nxt.start()
+        pieces.append(rest[:cut].strip())
+        rest = rest[cut:].strip()
+    if rest:
+        pieces.append(rest)
+    return [p for p in pieces if p]
 
 
 def split_lines(text: str, max_chars: int) -> list[str]:
@@ -98,7 +140,12 @@ def split_lines(text: str, max_chars: int) -> list[str]:
     if len(lines) >= 2 and len(lines[-1]) <= 6 and len(lines[-2]) + len(lines[-1]) <= max_chars + 6:
         lines[-2] = lines[-2] + lines[-1]
         lines.pop()
-    return lines
+    # a definition with no punctuation at all (36 chars of plain text) used to become
+    # one oversized cue that runs off a 1080p frame: --max-chars never got a chance
+    out: list[str] = []
+    for line in lines:
+        out.extend(hard_wrap(line, max_chars) if len(line) > max_chars * 1.5 else [line])
+    return out
 
 
 def _merge_short(cues: list[tuple[float, float, str]], max_chars: int):
@@ -186,6 +233,29 @@ def _submaker():
         return None
 
 
+def resolve_duration(mp3_path: Path, words: list[dict]) -> float:
+    """Page duration from ffprobe, falling back to the last word boundary.
+
+    Both gone means we truly cannot time the audio — raise instead of handing the
+    compositor a 0 that it turns into a `--hold`-second silent slide.
+    """
+    dur = ffprobe_duration(mp3_path)
+    if dur is not None:
+        return dur
+    if words:
+        dur = max(w["o"] + w["d"] for w in words)
+        print(f"  ! ffprobe failed on {mp3_path.name} — using the last word boundary "
+              f"({dur:.2f}s) as the page duration", flush=True)
+        return dur
+    raise DurationUnknown(
+        f"ffprobe failed and the service returned no word timings — cannot time "
+        f"{mp3_path.name}")
+
+
+class DurationUnknown(RuntimeError):
+    """The audio exists but nothing can tell us how long it is."""
+
+
 async def synth_one(text: str, voice: str, rate: str, volume: str, pitch: str,
                     mp3_path: Path, srt_path: Path, max_chars: int) -> tuple[float, str]:
     import edge_tts  # noqa: PLC0415
@@ -194,6 +264,7 @@ async def synth_one(text: str, voice: str, rate: str, volume: str, pitch: str,
     last_err: Exception | None = None
     for attempt in range(3):
         words: list[dict] = []
+        feed_err: str | None = None
         try:
             try:
                 com = edge_tts.Communicate(text, voice, rate=rate, volume=volume,
@@ -212,8 +283,12 @@ async def synth_one(text: str, voice: str, rate: str, volume: str, pitch: str,
                         if sub is not None:
                             try:
                                 sub.feed(chunk)
-                            except Exception:
-                                pass
+                            except Exception as exc:  # noqa: BLE001
+                                if not feed_err:
+                                    feed_err = f"{type(exc).__name__}: {exc}"
+                                    print(f"  ! SubMaker.feed failed ({feed_err}) — "
+                                          f"timings will come from the word stream "
+                                          f"instead", flush=True)
             srt_text = cues_to_srt(build_cues(text, words, max_chars)) if words else ""
             if not srt_text and sub is not None:
                 try:
@@ -224,7 +299,9 @@ async def synth_one(text: str, voice: str, rate: str, volume: str, pitch: str,
                 srt_path.write_text(srt_text, encoding="utf-8")
             elif srt_path.exists():
                 srt_path.unlink()
-            return ffprobe_duration(mp3_path), srt_text.strip()
+            return resolve_duration(mp3_path, words), srt_text.strip()
+        except DurationUnknown:
+            raise
         except Exception as exc:  # noqa: BLE001
             last_err = exc
             if mp3_path.exists():
@@ -243,23 +320,56 @@ async def main_async(args) -> int:
         segs = segs["segments"]
 
     results = []
+    silent: list[str] = []
+    failed: list[tuple[str, str]] = []
+    warnings: list[str] = []
     for i, seg in enumerate(segs, start=1):
         sid = str(seg.get("id") or f"{i:02d}")
         text = (seg.get("text") or "").strip()
         if not text:
             results.append({"id": sid, "text": "", "duration": 0.0, "chars": 0,
-                            "cues": 0, "srt": None, "audio": None})
+                            "cues": 0, "srt": None, "audio": None, "silent": True})
+            continue
+        if not is_speakable(text):
+            # punctuation only -> there is nothing to say; hold the slide instead of
+            # asking the service for audio it cannot produce
+            print(f"  ! [{sid}] no speakable characters in {text!r} — treated as a silent "
+                  f"slide (it will hold for --hold seconds)", flush=True)
+            results.append({"id": sid, "text": text, "duration": 0.0, "chars": len(text),
+                            "cues": 0, "srt": None, "audio": None, "silent": True})
+            silent.append(sid)
             continue
         mp3 = out / "audio" / f"{sid}.mp3"
         srt = out / "sub" / f"{sid}.srt"
         t0 = time.time()
-        dur, srt_text = await synth_one(text, args.voice, args.rate, args.volume,
-                                        args.pitch, mp3, srt, args.max_chars)
+        try:
+            dur, srt_text = await synth_one(text, args.voice, args.rate, args.volume,
+                                            args.pitch, mp3, srt, args.max_chars)
+        except Exception as exc:  # noqa: BLE001
+            # one broken page must not throw away the other 40: report it with its
+            # slide number, keep the page silent, and let the caller decide
+            msg = str(exc)
+            if not msg.startswith(f"[{sid}]"):
+                msg = f"[{sid}] {msg}"
+            print(f"  ! {msg}", flush=True)
+            failed.append((sid, msg))
+            results.append({"id": sid, "text": text, "duration": 0.0, "chars": len(text),
+                            "cues": 0, "srt": None, "audio": None, "error": msg})
+            if args.strict:
+                raise RuntimeError(msg) from exc
+            continue
         cues = srt_text.count("-->")
         print(f"  [{sid}] {len(text)} chars -> {dur:.1f}s audio"
               f"  ({time.time() - t0:.1f}s synth)"
               f"{f', {cues} subtitle cues' if cues else '  [no subtitles]'}",
               flush=True)
+        if not cues:
+            # the mp3 is fine but the service gave us no word boundaries: say so here,
+            # otherwise the only symptom is a silent `srt_cues: 0` three steps later
+            msg = (f"[{sid}] the service returned no word timings — this page has no "
+                   f"subtitles (the audio itself is fine)")
+            print(f"  ! {msg}", flush=True)
+            warnings.append(msg)
         results.append({
             "id": sid, "text": text, "duration": round(dur, 3),
             "chars": len(text), "cues": cues,
@@ -270,14 +380,22 @@ async def main_async(args) -> int:
     (out / "tts.json").write_text(json.dumps(results, ensure_ascii=False, indent=1),
                                   encoding="utf-8")
     total = sum(r["duration"] for r in results)
+    if failed:
+        pages = ", ".join(sid for sid, _ in failed)
+        print(f"  ! {len(failed)} page(s) failed to synthesise: {pages} — they will be "
+              f"silent in the video; re-run after fixing (or use --strict to abort)",
+              flush=True)
     print(json.dumps({
-        "ok": True,
+        "ok": not failed,
         "voice": args.voice,
         "segments": len(results),
         "total_seconds": round(total, 1),
         "total_minutes": round(total / 60, 2),
         "total_chars": sum(r["chars"] for r in results),
         "with_subtitles": sum(1 for r in results if r["srt"]),
+        "silent_slides": silent,
+        "failed_slides": [{"id": sid, "error": msg} for sid, msg in failed],
+        "warnings": warnings,
         "tts_json": str(out / "tts.json"),
     }, ensure_ascii=False, indent=1))
     return 0
@@ -311,6 +429,9 @@ def main(argv=None) -> int:
     ap.add_argument("--max-chars", type=int, default=18,
                     help="max characters per subtitle line (default 18)")
     ap.add_argument("--voices", action="store_true", help="list zh voices and exit")
+    ap.add_argument("--strict", action="store_true",
+                    help="abort on the first page the service refuses (default: keep going "
+                         "and report it in the summary)")
     args = ap.parse_args(normalize_argv(sys.argv[1:] if argv is None else argv))
 
     if args.voices:

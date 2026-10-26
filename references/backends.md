@@ -26,7 +26,11 @@
 }
 ```
 
-- 所有相对路径**相对 work 目录**解析。
+- 所有相对路径**相对 work 目录**（= `compose.py --project`）解析。
+- **手写 manifest 时请一律写相对路径**（`build/audio/01.mp3`）。绝对路径能读，但 libass 的
+  `subtitles=` 过滤器把 Windows 的 `D:/…` 当成 `image_size` 解析会直接报
+  `Unable to parse option value "D:/…/01.srt" as image size`；`compose.py` 现在会把路径转成
+  相对 `--project` 的形式并转义 `: , [ ] ; '`，落在 project 外的文件则**不烧字幕**并告警。
 - `duration` = 该段音频时长（秒，保留 3 位小数）；无音频写 `0`，改用 `--hold`。
 - `audio` / `srt` 可缺省。缺 `audio` 时该页静音；缺 `srt` 时该页无字幕。
 - 段序 = 播放序。

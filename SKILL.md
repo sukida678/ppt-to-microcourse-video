@@ -17,7 +17,7 @@ deck.pptx ──extract──▶ png/slide_NN.png + slides.json (text & speaker 
 narration.json ──build──▶ mp3 per slide ──▶ course.mp4 + course.srt
 ```
 
-Four commands, in order — the middle two are yours:
+Three commands, in order — the middle step (writing the narration) is yours:
 
 ```bash
 python scripts/doctor.py --fix                                  # 1 can this machine do it
@@ -30,6 +30,7 @@ python scripts/make_course.py build --work build                # 4 narration in
 
 ```bash
 python scripts/doctor.py --fix      # add --no-net to skip the TTS probe
+                                    # add --strict to fail without LibreOffice
 ```
 
 Parse the JSON. `ready.full_pipeline: false` means stop and fix the named blocker
@@ -100,12 +101,16 @@ Options worth knowing (`--help` for all):
 | `--transition` | `fade` | `none` for the fastest encode |
 | `--subs` | `burn` | `soft` for a sidecar `.srt` only, `none` to skip |
 | `--sub-box` | off | slides with content near the bottom edge: draws a translucent band so the subtitle doesn't fight the deck's own text |
-| `--sub-font` | `Microsoft YaHei` | on Linux/macOS pass `Noto Sans CJK SC` / `PingFang SC`, else CJK burns as empty boxes |
+| `--sub-font` | 平台 CJK 字体 | Windows `Microsoft YaHei` / macOS `PingFang SC` / Linux `Noto Sans CJK SC`；指定的字体没装时 `compose.py` 会换成第一个已装 CJK 字体并打印 `! subtitle font … is not installed — using …` |
 | `--bgm` | — | background music, mixed under the voice at `--music-volume 0.12` |
 | `--hold` | `5.0` | seconds a slide with no narration stays on screen |
 
-`build` refuses to run when `narration.json` is missing or still identical to the slide
-text — that means no script was written. `--allow-silent` forces a silent slideshow.
+`build` refuses to run when `narration.json` is **missing** (nothing was written at all);
+`--allow-silent` forces a silent slideshow instead. If the file exists but still copies the
+slide text, `build` only prints a warning —
+`! narration.json still matches the slide text verbatim — that is a screen reader, not a lesson. Rewrite it in spoken language.`
+— and goes on to render, so a screen-reader video is possible: rewrite the lines, don't
+assume the tool stopped you.
 
 It prints a JSON summary ending in `output`, `size_mb`, `srt_cues`. **Report those
 numbers to the user.** A finished micro-lecture with 0 srt cues means the subtitles

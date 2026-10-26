@@ -27,3 +27,8 @@ desktop.ini
 # keep the demo assets
 !examples/*.pptx
 !examples/*.json
+
+# audit / verification work dirs
+_verify/
+_audit/
+_verify_*/

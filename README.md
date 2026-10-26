@@ -10,10 +10,12 @@
 > ffmpeg + edge-tts, no API key and no cloud upload, so it runs inside any coding agent
 > (Codex / Claude Code / Cursor / Gemini CLI / DSH) or from a shell.
 
+▶ **[看 31 秒成片](https://github.com/sukida678/ppt-to-microcourse-video/releases/download/v0.1.0/demo.mp4)** — 2 MB，`examples/demo.pptx` 跑出来的完整一条（中文旁白 + 烧入字幕 + 运镜）。
+
 ![示例成片：封面 + 字幕](docs/preview-01.png)
 ![示例成片：小结页](docs/preview-02.png)
 
-上面是 `examples/demo.pptx` 跑出来的真实画面（`--motion none`，所以画面不裁边）。
+上面两张就是那条片子的截图（`--motion none`，所以画面不裁边）。
 字幕是按真实发音时间对齐的，不是按字数均分。
 
 ---

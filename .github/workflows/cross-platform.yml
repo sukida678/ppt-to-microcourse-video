@@ -19,7 +19,7 @@ jobs:
   compose:
     name: compose · ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -32,17 +32,17 @@ jobs:
           python-version: "3.12"
 
       - name: Install ffmpeg (+ a CJK font on Linux)
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "Linux" ]; then
             # The ubuntu-latest image already ships ffmpeg with libass; only the CJK font
             # is missing. Installing both risks a 30-minute apt stall for nothing.
-            sudo apt-get update -qq -o Acquire::Retries=2
+            sudo apt-get update -qq -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
             if ! command -v ffmpeg >/dev/null; then
-              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends ffmpeg
             fi
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends fonts-noto-cjk
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends fonts-noto-cjk
           else
             # NOT `brew install ffmpeg`: since 9.0 that formula is the slim build with no
             # libass/fontconfig/freetype, so the `subtitles` filter is absent and burned-in
@@ -175,7 +175,7 @@ jobs:
   full-pipeline:
     name: full pipeline · ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -188,16 +188,16 @@ jobs:
           python-version: "3.12"
 
       - name: Install ffmpeg, LibreOffice, CJK fonts
-        timeout-minutes: 25
+        timeout-minutes: 70
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "Linux" ]; then
-            sudo apt-get update -qq -o Acquire::Retries=2
+            sudo apt-get update -qq -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
             # --no-install-recommends keeps this to the part the renderer actually uses
             if ! command -v ffmpeg >/dev/null; then
-              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends ffmpeg
             fi
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends fonts-noto-cjk libreoffice-impress
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 --no-install-recommends fonts-noto-cjk libreoffice-impress
           else
             brew install ffmpeg-full
             echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"

@@ -16,7 +16,7 @@
 ![示例成片：小结页](docs/preview-02.png)
 
 上面两张就是那条片子的截图（`--motion none`，所以画面不裁边）。
-字幕是按真实发音时间对齐的，不是按字数均分。
+字幕优先按真实发音时间对齐；服务返回的词时间戳与文本对不上时，退回按字数比例分配；一个词时间戳都没拿到时，这一页不出字幕，并在日志里打告警（`! … no word timings …`）。
 
 ---
 
@@ -34,7 +34,7 @@ git clone https://github.com/sukida678/ppt-to-microcourse-video.git   # 或在�
 想先看效果，不用自己的课件：
 
 ```bash
-python install.py
+python install.py            # 只检查，不动你的系统；要装 Python 包加 --install
 python scripts/make_course.py extract --deck examples/demo.pptx --work build
 copy examples\narration.example.json build\narration.json    # Windows
 cp   examples/narration.example.json build/narration.json    # macOS / Linux
@@ -70,7 +70,7 @@ AI 会自己检查环境、拆页面、写讲稿、配音、合片、抽查画�
 4. **配音**：微软 Edge 的免费中文语音（默认女声·晓晓），语速可调
 5. **配字幕**：按真实发音时间对齐，烧进画面；另存一份 `.srt` 备用
 6. **合片**：1920×1080 或 4K，H.264，微信/钉钉/学习平台都能直接播
-7. **自检**：抽帧看字幕有没有压住内容、画面有没有被切边，不合格会自己重做
+7. **自检**：抽帧看字幕有没有压住内容、画面有没有被切边，**发现问题会报给你**（没有"自动重做"循环——要不要重跑由你决定）
 
 ---
 
@@ -82,8 +82,8 @@ AI 会自己检查环境、拆页面、写讲稿、配音、合片、抽查画�
 | "讲慢一点" | 语速 `-8%`，适合要跟着操作的课 |
 | "画面别动" | 关掉运镜，整页稳定显示 |
 | "压到 6 分钟" | 讲稿改提纲式，不逐条展开 |
-| "分成两集" | 按章节拆成两个短视频 |
-| "加背景音乐" | 垫在旁白下面，自动压低音量 |
+| "分成两集" | AI 手动拆：把讲稿和页面清单分成两份，各跑一次 build（没有 `--split-by` 开关） |
+| "加背景音乐" | 按 `--music-volume`（默认 0.12）垫在旁白下面；是**固定音量**，不会跟着旁白自动起伏 |
 | "字幕挡字了" | 给字幕加半透明底条 |
 
 ---
@@ -163,7 +163,7 @@ build/
 ├── narration.json         ← 讲稿（AI 写的，你必须改掉模板）
 ├── audio/  sub/  parts/   ← 配音 mp3、逐页字幕、分段视频
 ├── course.mp4             ← 成片
-└── course.srt             ← 整片字幕（备用，不受 --subs 影响）
+└── course.srt             ← 整片字幕（`--subs burn/soft` 才有；`--subs none` 不生成）
 ```
 
 ---
